@@ -40,6 +40,26 @@ button {
   cursor: pointer;
 }
 
+.shiki-code pre {
+  min-height: 260px;
+  overflow: auto;
+  padding: 1rem;
+  font-size: 12px;
+  line-height: 1.5rem;
+  background: #1f242b !important;
+}
+
+.shiki-code code {
+  font-family:
+    ui-monospace,
+    SFMono-Regular,
+    SF Mono,
+    Menlo,
+    Consolas,
+    Liberation Mono,
+    monospace;
+}
+
 [data-slot="popover-content"] {
   opacity: 1;
   transform: scale(1) translate3d(0, 0, 0);

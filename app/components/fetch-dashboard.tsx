@@ -964,9 +964,7 @@ function ImplementationPanel({
           ))}
           <Code2 className="ml-auto mr-3 text-[#6e6e73]" size={15} />
         </div>
-        <pre className="min-h-[260px] overflow-auto bg-[#1f242b] p-4 text-[12px] leading-6 text-[#f5f5f7]">
-          <code>{currentCode}</code>
-        </pre>
+        <HighlightedCode code={currentCode} filename={activeCodeTab} />
       </div>
 
       <div className="mt-4 grid gap-3 lg:grid-cols-[1fr_0.9fr]">
@@ -995,6 +993,48 @@ function ImplementationPanel({
       </div>
     </div>
   );
+}
+
+function HighlightedCode({ code, filename }: { code: string; filename: string }) {
+  const [html, setHtml] = useState<string | null>(null);
+
+  useEffect(() => {
+    let cancelled = false;
+    setHtml(null);
+
+    import("../lib/code-highlighter")
+      .then(({ highlightCode }) => highlightCode(code, languageForFilename(filename)))
+      .then((nextHtml) => {
+        if (!cancelled) {
+          setHtml(nextHtml);
+        }
+      })
+      .catch(() => {
+        if (!cancelled) {
+          setHtml(null);
+        }
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [code, filename]);
+
+  if (!html) {
+    return (
+      <pre className="min-h-[260px] overflow-auto bg-[#1f242b] p-4 text-[12px] leading-6 text-[#f5f5f7]">
+        <code>{code}</code>
+      </pre>
+    );
+  }
+
+  return <div className="shiki-code" dangerouslySetInnerHTML={{ __html: html }} />;
+}
+
+function languageForFilename(filename: string): "markdown" | "tsx" | "typescript" {
+  if (filename.endsWith(".md")) return "markdown";
+  if (filename.endsWith(".ts")) return "typescript";
+  return "tsx";
 }
 
 export function PanelSkeleton({ title }: { settings?: SimulatorSettings; title: string }) {
