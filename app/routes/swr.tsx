@@ -1,12 +1,24 @@
 import useSWR from "swr";
 import {
+  AccountOverviewSection,
+  AccountOverviewSkeleton,
+  AccountsTableSection,
+  AccountsTableSkeleton,
   DashboardPage,
-  ErrorPanel,
-  PanelSkeleton,
-  ResolvedDataPanel,
+  ProgressiveDataPanel,
+  ResourceSectionError,
+  SummaryMetricSection,
+  SummaryMetricsSkeleton,
   useDashboardControls,
 } from "../components/fetch-dashboard";
-import { fetchAccountDashboard, makePayload } from "../lib/fetch-lab";
+import {
+  composeAccount,
+  composeAccounts,
+  composeSummary,
+  fetchAccountResource,
+  fetchAccountsResource,
+  fetchSummaryResource,
+} from "../lib/fetch-lab";
 
 export function meta() {
   return [{ title: "SWR | Fetch Strategy Studio" }];
@@ -16,41 +28,69 @@ export default function SwrRoute() {
   const controls = useDashboardControls();
   const { settings } = controls;
   const key = [
-    "account-dashboard",
-    settings.latency,
-    settings.error,
+    settings.resourceLatencies.account,
+    settings.resourceLatencies.accounts,
+    settings.resourceLatencies.summary,
+    settings.resourceErrors.account,
+    settings.resourceErrors.accounts,
+    settings.resourceErrors.summary,
     settings.race,
     settings.strict,
     settings.seed,
   ] as const;
-  const { data, error, isLoading, isValidating, mutate } = useSWR(
-    key,
-    () => fetchAccountDashboard("swr", settings),
-    {
-      keepPreviousData: true,
-      revalidateOnFocus: true,
-      shouldRetryOnError: false,
-    },
-  );
+  const account = useSWR(["account", ...key], () => fetchAccountResource("swr", settings), {
+    keepPreviousData: true,
+    revalidateOnFocus: true,
+    shouldRetryOnError: false,
+  });
+  const accounts = useSWR(["accounts", ...key], () => fetchAccountsResource("swr", settings), {
+    keepPreviousData: true,
+    revalidateOnFocus: true,
+    shouldRetryOnError: false,
+  });
+  const summary = useSWR(["summary", ...key], () => fetchSummaryResource("swr", settings), {
+    keepPreviousData: true,
+    revalidateOnFocus: true,
+    shouldRetryOnError: false,
+  });
+  const isValidating = account.isValidating || accounts.isValidating || summary.isValidating;
 
-  let panel = (
-    <ResolvedDataPanel
-      data={data ?? makePayload("swr", settings)}
-      badge={isValidating ? "Updating cached data" : "Serving cached view"}
-    />
-  );
-
-  if (isLoading && !data) {
-    panel = <PanelSkeleton title="SWR is loading the first response" />;
-  }
-
-  if (error && !data) {
-    panel = <ErrorPanel message={error.message} refetch={() => void mutate()} />;
+  function mutateResources() {
+    void Promise.all([account.mutate(), accounts.mutate(), summary.mutate()]);
   }
 
   return (
-    <DashboardPage activeStrategy="swr" controls={controls} generatedAt={data?.generatedAt}>
-      {panel}
+    <DashboardPage activeStrategy="swr" controls={controls}>
+      <ProgressiveDataPanel
+        account={
+          settings.resourceErrors.account || account.error ? (
+            <ResourceSectionError label="Account" refetch={mutateResources} />
+          ) : account.data ? (
+            <AccountOverviewSection account={composeAccount(account.data, settings)} />
+          ) : (
+            <AccountOverviewSkeleton />
+          )
+        }
+        accounts={
+          settings.resourceErrors.accounts || accounts.error ? (
+            <ResourceSectionError label="Accounts" refetch={mutateResources} />
+          ) : accounts.data ? (
+            <AccountsTableSection accounts={composeAccounts(accounts.data, settings)} />
+          ) : (
+            <AccountsTableSkeleton />
+          )
+        }
+        badge={isValidating ? "Updating cached data" : "Progressive"}
+        summary={
+          settings.resourceErrors.summary || summary.error ? (
+            <ResourceSectionError label="Summary" refetch={mutateResources} />
+          ) : summary.data ? (
+            <SummaryMetricSection summary={composeSummary(summary.data, settings)} />
+          ) : (
+            <SummaryMetricsSkeleton />
+          )
+        }
+      />
     </DashboardPage>
   );
 }

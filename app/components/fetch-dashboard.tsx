@@ -17,14 +17,25 @@ import {
   defaultSettings,
   getStrategy,
   parseSettings,
+  resourceSpecs,
   settingsToSearch,
   strategies,
+  type Account,
   type DashboardPayload,
+  type DashboardSummary,
+  type ResourceKey,
   type SimulatorSettings,
   type StrategyId,
   type StrategyMeta,
 } from "../lib/fetch-lab";
-import { Link, NavLink, useNavigate, useSearchParams } from "react-router";
+import {
+  Link,
+  NavLink,
+  useLocation,
+  useNavigate,
+  useRevalidator,
+  useSearchParams,
+} from "react-router";
 import {
   Popover,
   PopoverClose,
@@ -61,27 +72,61 @@ const codeSamples: Record<StrategyId, Record<string, string>> = {
     "route.tsx": `export function clientLoader({ request }: Route.ClientLoaderArgs) {
   const settings = parseSettings(new URL(request.url).searchParams);
   return {
-    account: fetchAccountDashboard("client-loader", settings, request.signal),
+    account: fetchAccountResource("client-loader", settings, request.signal),
+    accounts: fetchAccountsResource("client-loader", settings, request.signal),
+    summary: fetchSummaryResource("client-loader", settings, request.signal),
   };
 }
 
 export default function Route() {
-  const { account } = useLoaderData<typeof clientLoader>();
+  const resources = useLoaderData<typeof clientLoader>();
 
   return (
-    <Suspense fallback={<AccountSkeleton />}>
-      <Await resolve={account}>
-        {(data) => <AccountView data={data} />}
-      </Await>
-    </Suspense>
+    <DashboardPanel
+      account={
+        <Suspense fallback={<AccountSkeleton />}>
+          <Await resolve={resources.account}>{(data) => <AccountHeader data={data} />}</Await>
+        </Suspense>
+      }
+      summary={
+        <Suspense fallback={<SummarySkeleton />}>
+          <Await resolve={resources.summary}>{(data) => <Metrics data={data} />}</Await>
+        </Suspense>
+      }
+      accounts={
+        <Suspense fallback={<AccountsSkeleton />}>
+          <Await resolve={resources.accounts}>{(data) => <AccountsTable data={data} />}</Await>
+        </Suspense>
+      }
+    />
   );
 }`,
-    "api.ts": `export async function fetchAccountDashboard(strategy, settings, signal) {
-  await wait(settings.latency, signal);
-  if (settings.error) throw new Error("500 from /api/accounts/:id");
-  const response = await fetch("/api/account-dashboard.json", { signal });
+    "api.ts": `const resourceUrls = {
+  account: "/api/account.json",
+  accounts: "/api/accounts.json",
+  summary: "/api/summary.json",
+};
+
+export async function fetchResource(resource, settings, signal) {
+  const url = resourceUrls[resource];
+  await wait(settings.resourceLatencies[resource], signal);
+  if (settings.resourceErrors[resource]) throw new Error("500 from " + url);
+
+  const response = await fetch(url, { signal });
   if (!response.ok) throw new Error("Unexpected API response");
-  return applyScenario(await response.json(), strategy, settings);
+  return response.json();
+}
+
+export function fetchAccountResource(strategy, settings, signal) {
+  return fetchResource("account", settings, signal);
+}
+
+export function fetchAccountsResource(strategy, settings, signal) {
+  return fetchResource("accounts", settings, signal);
+}
+
+export function fetchSummaryResource(strategy, settings, signal) {
+  return fetchResource("summary", settings, signal);
 }`,
     "notes.md": `Why this works:
 - the route shell renders before slow data resolves
@@ -91,40 +136,64 @@ export default function Route() {
 - revalidation is explicit instead of component-local`,
   },
   "jotai-use": {
-    "route.tsx": `const dashboardAtom = atomFamily((key: string) =>
-  atom(async () => fetchAccountDashboard("jotai-use", parseSettingsKey(key)))
+    "route.tsx": `const accountAtom = atomFamily((key: string) =>
+  atom(async () => fetchAccountResource("jotai-use", parseSettingsKey(key)))
+);
+const accountsAtom = atomFamily((key: string) =>
+  atom(async () => fetchAccountsResource("jotai-use", parseSettingsKey(key)))
+);
+const summaryAtom = atomFamily((key: string) =>
+  atom(async () => fetchSummaryResource("jotai-use", parseSettingsKey(key)))
 );
 
-function AccountResource({ settings }) {
-  const data = useAtomValue(dashboardAtom(settingsKey(settings)));
-  return <AccountView data={data} />;
+function Route() {
+  const key = settingsKey(settings);
+  return (
+    <DashboardPanel
+      account={<ResourceBoundary><Suspense fallback={<AccountSkeleton />}><AccountSection atomKey={key} /></Suspense></ResourceBoundary>}
+      summary={<ResourceBoundary><Suspense fallback={<SummarySkeleton />}><SummarySection atomKey={key} /></Suspense></ResourceBoundary>}
+      accounts={<ResourceBoundary><Suspense fallback={<AccountsSkeleton />}><AccountsSection atomKey={key} /></Suspense></ResourceBoundary>}
+    />
+  );
 }`,
-    "atom.ts": `const userAtom = atomFamily((userId: string) =>
-  atom(async () => fetchUser(userId))
-);
+    "atom.ts": `function AccountSection({ atomKey }: { atomKey: string }) {
+  const account = useAtomValue(accountAtom(atomKey));
+  return <AccountHeader data={account} />;
+}
 
-const accountAtom = atomFamily((key: string) =>
-  atom(async () => fetchAccountDashboard("jotai-use", parseSettingsKey(key)))
-);
+function SummarySection({ atomKey }: { atomKey: string }) {
+  const summary = useAtomValue(summaryAtom(atomKey));
+  return <Metrics data={summary} />;
+}
 
-// Fixed data: define the async atom outside.
-// Parameterized data: use atomFamily.
-// useAtomValue suspends and returns the resolved value.`,
+function AccountsSection({ atomKey }: { atomKey: string }) {
+  const accounts = useAtomValue(accountsAtom(atomKey));
+  return <AccountsTable data={accounts} />;
+}
+
+// Do not combine these with Promise.all inside one atom.
+// Split atoms let each Suspense boundary reveal independently.`,
     "notes.md": `Good fit:
 - shared client resources
 - Suspense-first loading
 - explicit invalidation
+- progressive reveal when resources are split into separate atoms
 
 Watch out:
 - cache lifetime is your design decision`,
   },
   swr: {
-    "route.tsx": `const { data, error, isLoading, isValidating, mutate } = useSWR(
-  ["account", settings],
-  ([, settings]) => fetchAccountDashboard("swr", settings)
-);
+    "route.tsx": `const account = useSWR(["account", key], () => fetchAccountResource("swr", settings));
+const accounts = useSWR(["accounts", key], () => fetchAccountsResource("swr", settings));
+const summary = useSWR(["summary", key], () => fetchSummaryResource("swr", settings));
 
-return <AccountView data={data} validating={isValidating} />;`,
+return (
+  <DashboardPanel
+    account={account.data ? <AccountHeader data={account.data} /> : <AccountSkeleton />}
+    summary={summary.data ? <Metrics data={summary.data} /> : <SummarySkeleton />}
+    accounts={accounts.data ? <AccountsTable data={accounts.data} /> : <AccountsSkeleton />}
+  />
+);`,
     "swr.ts": `useSWR(key, fetcher, {
   keepPreviousData: true,
   revalidateOnFocus: true,
@@ -137,14 +206,17 @@ The caveat is ownership: route loaders and SWR can both think they own freshness
   },
   "use-effect": {
     "route.tsx": `useEffect(() => {
-  setLoading(true);
-  fetchAccountDashboard("use-effect", settings)
-    .then(setData)
-    .catch(setError)
-    .finally(() => setLoading(false));
+  setAccount(null);
+  setAccounts(null);
+  setSummary(null);
+
+  fetchAccountResource("use-effect", settings).then(setAccount).catch(setAccountError);
+  fetchAccountsResource("use-effect", settings).then(setAccounts).catch(setAccountsError);
+  fetchSummaryResource("use-effect", settings).then(setSummary).catch(setSummaryError);
 }, [settings]);
 
-// Missing abort + cache + dedupe makes UX policy local and fragile.`,
+// Progressive rendering is possible, but abort, cache, dedupe,
+// and race protection are still manual responsibilities.`,
     "pitfalls.md": `Failure modes shown here:
 - race condition when older responses win
 - duplicate requests in Strict Mode development
@@ -154,12 +226,30 @@ The caveat is ownership: route loaders and SWR can both think they own freshness
 };
 
 export function useDashboardControls(): DashboardControls {
-  const [searchParams, setSearchParams] = useSearchParams();
-  const settings = parseSettings(searchParams);
+  const [searchParams] = useSearchParams();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const revalidator = useRevalidator();
+  const searchKey = searchParams.toString();
+  const parsedSettings = parseSettings(searchParams);
+  const [settings, setSettings] = useState(parsedSettings);
+
+  useEffect(() => {
+    setSettings(parsedSettings);
+  }, [searchKey]);
 
   function updateSettings(next: Partial<SimulatorSettings>) {
     const merged = { ...settings, ...next };
-    setSearchParams(settingsToSearch(merged), { preventScrollReset: true, replace: false });
+    setSettings(merged);
+    void Promise.resolve(
+      navigate(
+        {
+          pathname: location.pathname,
+          search: `?${settingsToSearch(merged)}`,
+        },
+        { preventScrollReset: true, replace: false },
+      ),
+    ).then(() => revalidator.revalidate());
   }
 
   function refetch() {
@@ -167,10 +257,16 @@ export function useDashboardControls(): DashboardControls {
   }
 
   function reset() {
-    setSearchParams(settingsToSearch(defaultSettings), {
-      preventScrollReset: true,
-      replace: false,
-    });
+    setSettings(defaultSettings);
+    void Promise.resolve(
+      navigate(
+        {
+          pathname: location.pathname,
+          search: `?${settingsToSearch(defaultSettings)}`,
+        },
+        { preventScrollReset: true, replace: false },
+      ),
+    ).then(() => revalidator.revalidate());
   }
 
   return { refetch, reset, settings, updateSettings };
@@ -441,6 +537,33 @@ export function ResolvedDataPanel({
   warning?: string;
 }) {
   return (
+    <ProgressiveDataPanel
+      account={<AccountOverviewSection account={data.account} />}
+      accounts={<AccountsTableSection accounts={data.accounts} />}
+      badge={badge}
+      generatedAt={data.generatedAt}
+      summary={<SummaryMetricSection summary={data.summary} />}
+      warning={warning}
+    />
+  );
+}
+
+export function ProgressiveDataPanel({
+  account,
+  accounts,
+  badge,
+  generatedAt,
+  summary,
+  warning,
+}: {
+  account: ReactNode;
+  accounts: ReactNode;
+  badge?: string;
+  generatedAt?: string;
+  summary: ReactNode;
+  warning?: string;
+}) {
+  return (
     <div className="min-w-0 border-r border-[#e7e7e2] p-4">
       <SectionTitle title="Account Overview" badge={badge ?? "Active"} />
       {warning ? (
@@ -449,90 +572,88 @@ export function ResolvedDataPanel({
         </div>
       ) : null}
       <div className="rounded-lg border border-[#e2e2dc]">
-        <div className="grid gap-3 border-b border-[#eeeeea] p-4 sm:grid-cols-[1fr_140px]">
-          <div className="flex items-center gap-3">
-            <div className="flex size-11 items-center justify-center rounded-full bg-[#111] text-white">
-              <Route size={22} />
-            </div>
-            <div>
-              <div className="flex items-center gap-2">
-                <p className="text-[15px] font-semibold">{data.account.name}</p>
-                <span className="rounded-full bg-[#ecf8ef] px-2 py-0.5 text-[11px] font-medium text-[#177b35]">
-                  {data.account.status}
-                </span>
-              </div>
-              <p className="mt-1 text-[12px] text-[#6e6e73]">
-                {data.account.domain} · {data.account.id}
-              </p>
-            </div>
-          </div>
-          <div className="border-l border-[#eeeeea] pl-4">
-            <p className="text-[11px] text-[#6e6e73]">MRR</p>
-            <p className="text-[22px] font-semibold tracking-normal">
-              ${data.account.mrr.toLocaleString()}
-            </p>
-            <p className="text-[11px] font-medium text-[#17833b]">+ 12.4%</p>
-          </div>
-        </div>
-        <div className="grid grid-cols-2 gap-2 p-3 lg:grid-cols-4">
-          <MiniMetric label="Users" value={data.summary.users.toString()} change="+ 5.1%" />
-          <MiniMetric label="Projects" value={data.summary.projects.toString()} change="+ 9.0%" />
-          <MiniMetric
-            label="Requests"
-            value={data.summary.requests.toLocaleString()}
-            change="+ 18.7%"
-          />
-          <MiniMetric
-            label="Error Rate"
-            value={`${data.summary.errorRate.toFixed(2)}%`}
-            change="- 32.1%"
-          />
-        </div>
+        {account}
+        {summary}
       </div>
 
       <div className="mt-4 rounded-lg border border-[#e2e2dc]">
         <div className="flex items-center justify-between border-b border-[#eeeeea] px-3 py-2">
           <h3 className="text-[13px] font-semibold">Recent Accounts</h3>
-          <span className="text-[11px] text-[#8a8a8e]">{data.generatedAt}</span>
+          <span className="text-[11px] text-[#8a8a8e]">{generatedAt ?? "live"}</span>
         </div>
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[440px] border-collapse text-left text-[12px]">
-            <thead className="text-[#6e6e73]">
-              <tr className="border-b border-[#eeeeea]">
-                <th className="px-3 py-2 font-medium">Account</th>
-                <th className="px-3 py-2 font-medium">MRR</th>
-                <th className="px-3 py-2 font-medium">Status</th>
-                <th className="px-3 py-2 font-medium">Requests</th>
-                <th className="px-3 py-2 font-medium">Incidents</th>
-              </tr>
-            </thead>
-            <tbody>
-              {data.accounts.map((account, index) => (
-                <tr
-                  className={index === 0 ? "bg-[#f5f8fb]" : "border-t border-[#f1f1ed]"}
-                  key={account.id}
-                >
-                  <td className="px-3 py-2">
-                    <p className="font-medium">{account.name}</p>
-                    <p className="text-[11px] text-[#8a8a8e]">{account.domain}</p>
-                  </td>
-                  <td className="px-3 py-2">${account.mrr.toLocaleString()}</td>
-                  <td className="px-3 py-2">
-                    <span
-                      className={`rounded-full px-2 py-0.5 text-[11px] ${statusClass(account.status)}`}
-                    >
-                      {account.status}
-                    </span>
-                  </td>
-                  <td className="px-3 py-2">{account.requests.toLocaleString()}</td>
-                  <td className="px-3 py-2">{account.incidents}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <div className="overflow-x-auto">{accounts}</div>
       </div>
     </div>
+  );
+}
+
+export function AccountOverviewSection({ account }: { account: Account }) {
+  return (
+    <div className="grid gap-3 border-b border-[#eeeeea] p-4 sm:grid-cols-[1fr_140px]">
+      <div className="flex items-center gap-3">
+        <div className="flex size-11 items-center justify-center rounded-full bg-[#111] text-white">
+          <Route size={22} />
+        </div>
+        <div>
+          <div className="flex items-center gap-2">
+            <p className="text-[15px] font-semibold">{account.name}</p>
+            <span className="rounded-full bg-[#ecf8ef] px-2 py-0.5 text-[11px] font-medium text-[#177b35]">
+              {account.status}
+            </span>
+          </div>
+          <p className="mt-1 text-[12px] text-[#6e6e73]">
+            {account.domain} · {account.id}
+          </p>
+        </div>
+      </div>
+      <div className="border-l border-[#eeeeea] pl-4">
+        <p className="text-[11px] text-[#6e6e73]">MRR</p>
+        <p className="text-[22px] font-semibold tracking-normal">${account.mrr.toLocaleString()}</p>
+        <p className="text-[11px] font-medium text-[#17833b]">+ 12.4%</p>
+      </div>
+    </div>
+  );
+}
+
+export function SummaryMetricSection({ summary }: { summary: DashboardSummary }) {
+  return (
+    <div className="grid grid-cols-2 gap-2 p-3 lg:grid-cols-4">
+      <MiniMetric label="Users" value={summary.users.toString()} change="+ 5.1%" />
+      <MiniMetric label="Projects" value={summary.projects.toString()} change="+ 9.0%" />
+      <MiniMetric label="Requests" value={summary.requests.toLocaleString()} change="+ 18.7%" />
+      <MiniMetric label="Error Rate" value={`${summary.errorRate.toFixed(2)}%`} change="- 32.1%" />
+    </div>
+  );
+}
+
+export function AccountsTableSection({ accounts }: { accounts: Account[] }) {
+  return (
+    <table className="w-full min-w-[440px] border-collapse text-left text-[12px]">
+      <AccountsTableHeader />
+      <tbody>
+        {accounts.map((account, index) => (
+          <tr
+            className={index === 0 ? "bg-[#f5f8fb]" : "border-t border-[#f1f1ed]"}
+            key={account.id}
+          >
+            <td className="px-3 py-2">
+              <p className="font-medium">{account.name}</p>
+              <p className="text-[11px] text-[#8a8a8e]">{account.domain}</p>
+            </td>
+            <td className="px-3 py-2">${account.mrr.toLocaleString()}</td>
+            <td className="px-3 py-2">
+              <span
+                className={`rounded-full px-2 py-0.5 text-[11px] ${statusClass(account.status)}`}
+              >
+                {account.status}
+              </span>
+            </td>
+            <td className="px-3 py-2">{account.requests.toLocaleString()}</td>
+            <td className="px-3 py-2">{account.incidents}</td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
   );
 }
 
@@ -606,43 +727,51 @@ function TweaksPanel({
     <div className="grid gap-2">
       <div className="flex items-center justify-between gap-3 rounded-md border border-[#e2e2dc] bg-[#fbfbf9] px-2.5 py-2">
         <div>
-          <p className="text-[11px] font-medium">Endpoint</p>
-          <p className="mt-0.5 text-[11px] text-[#6e6e73]">GET /api/accounts/:id</p>
+          <p className="text-[11px] font-medium">Resources</p>
+          <p className="mt-0.5 text-[11px] text-[#6e6e73]">3 parallel JSON requests</p>
         </div>
         <span className="rounded-md border border-[#d8d8d2] bg-white px-2 py-1 text-[10px] font-medium text-[#6e6e73]">
-          acct_7f9a2d1b
+          account / list / summary
         </span>
       </div>
 
-      <label className="grid gap-1.5 text-[11px]">
-        <span className="flex items-center justify-between font-medium">
-          Latency
-          <span>{settings.latency} ms</span>
+      <div className="grid gap-1.5 text-[11px]">
+        <span className="font-medium">Response timing</span>
+        <span className="text-[10px] leading-4 text-[#6e6e73]">
+          Tune each resource independently.
         </span>
-        <input
-          className="accent-[#1d1d1f]"
-          max={1500}
-          min={0}
-          onChange={(event) => updateSettings({ latency: Number(event.target.value) })}
-          step={50}
-          type="range"
-          value={settings.latency}
-        />
-        <span className="flex justify-between text-[10px] text-[#8a8a8e]">
-          <span>0</span>
-          <span>500</span>
-          <span>1000</span>
-          <span>1500</span>
+      </div>
+
+      <div className="grid gap-2">
+        {resourceSpecs.map((resource) => (
+          <ResourceLatencySlider
+            key={resource.key}
+            resourceKey={resource.key}
+            label={resource.label}
+            path={resource.path}
+            settings={settings}
+            updateSettings={updateSettings}
+          />
+        ))}
+      </div>
+
+      <div className="grid gap-1.5 text-[11px]">
+        <span className="font-medium">Resource failures</span>
+        <span className="text-[10px] leading-4 text-[#6e6e73]">
+          Fail one response while the others keep rendering.
         </span>
-      </label>
+      </div>
 
       <div className="grid gap-1.5">
-        <ToggleTile
-          checked={settings.error}
-          description="Return 500"
-          label="Simulate Error"
-          onChange={(error) => updateSettings({ error })}
-        />
+        {resourceSpecs.map((resource) => (
+          <ResourceErrorToggle
+            key={resource.key}
+            label={resource.label}
+            resourceKey={resource.key}
+            settings={settings}
+            updateSettings={updateSettings}
+          />
+        ))}
         <ToggleTile
           checked={settings.race}
           description="Out-of-order responses"
@@ -669,6 +798,81 @@ function TweaksPanel({
         </button>
       </div>
     </div>
+  );
+}
+
+function ResourceLatencySlider({
+  label,
+  path,
+  resourceKey,
+  settings,
+  updateSettings,
+}: {
+  label: string;
+  path: string;
+  resourceKey: ResourceKey;
+  settings: SimulatorSettings;
+  updateSettings: (next: Partial<SimulatorSettings>) => void;
+}) {
+  const latency = settings.resourceLatencies[resourceKey];
+
+  function updateLatency(nextLatency: number) {
+    updateSettings({
+      resourceLatencies: {
+        ...settings.resourceLatencies,
+        [resourceKey]: nextLatency,
+      },
+    });
+  }
+
+  return (
+    <label className="grid gap-1 rounded-md border border-[#e2e2dc] bg-white px-2.5 py-2 text-[11px]">
+      <span className="flex items-start justify-between gap-2">
+        <span>
+          <span className="block font-medium">{label}</span>
+          <span className="mt-0.5 block text-[10px] leading-4 text-[#6e6e73]">{path}</span>
+        </span>
+      </span>
+      <input
+        className="accent-[#1d1d1f]"
+        max={2000}
+        min={0}
+        onChange={(event) => updateLatency(Number(event.target.value))}
+        step={50}
+        type="range"
+        value={latency}
+      />
+    </label>
+  );
+}
+
+function ResourceErrorToggle({
+  label,
+  resourceKey,
+  settings,
+  updateSettings,
+}: {
+  label: string;
+  resourceKey: ResourceKey;
+  settings: SimulatorSettings;
+  updateSettings: (next: Partial<SimulatorSettings>) => void;
+}) {
+  function updateError(enabled: boolean) {
+    updateSettings({
+      resourceErrors: {
+        ...settings.resourceErrors,
+        [resourceKey]: enabled,
+      },
+    });
+  }
+
+  return (
+    <ToggleTile
+      checked={settings.resourceErrors[resourceKey]}
+      description="Return 500"
+      label={label}
+      onChange={updateError}
+    />
   );
 }
 
@@ -736,39 +940,13 @@ function ImplementationPanel({
   );
 }
 
-export function PanelSkeleton({ title }: { title: string }) {
+export function PanelSkeleton({ title }: { settings?: SimulatorSettings; title: string }) {
   return (
     <div className="min-w-0 border-r border-[#e7e7e2] p-4">
       <SectionTitle title={title} badge="Loading" />
       <div className="rounded-lg border border-[#e2e2dc]">
-        <div className="grid gap-3 border-b border-[#eeeeea] p-4 sm:grid-cols-[1fr_140px]">
-          <div className="flex items-center gap-3">
-            <div className="size-11 animate-pulse rounded-full bg-[#deded9]" />
-            <div>
-              <div className="flex items-center gap-2">
-                <div className="h-[18px] w-[132px] animate-pulse rounded-md bg-[#e2e2dc]" />
-                <div className="h-[20px] w-[58px] animate-pulse rounded-full bg-[#ededeb]" />
-              </div>
-              <div className="mt-2 h-[15px] w-[220px] max-w-full animate-pulse rounded-md bg-[#ededeb]" />
-            </div>
-          </div>
-          <div className="border-l border-[#eeeeea] pl-4">
-            <div className="h-[14px] w-[30px] animate-pulse rounded-md bg-[#ededeb]" />
-            <div className="mt-2 h-[31px] w-[104px] animate-pulse rounded-md bg-[#e2e2dc]" />
-            <div className="mt-2 h-[14px] w-[52px] animate-pulse rounded-md bg-[#ededeb]" />
-          </div>
-        </div>
-        <div className="grid grid-cols-2 gap-2 p-3 lg:grid-cols-4">
-          {Array.from({ length: 4 }).map((_, index) => (
-            <div className="rounded-md border border-[#e4e4df] p-3" key={index}>
-              <div className="h-[14px] w-[64px] animate-pulse rounded-md bg-[#ededeb]" />
-              <div className="mt-2 flex items-end justify-between gap-2">
-                <div className="h-[27px] w-[58px] animate-pulse rounded-md bg-[#e2e2dc]" />
-                <div className="h-[14px] w-[44px] animate-pulse rounded-md bg-[#ededeb]" />
-              </div>
-            </div>
-          ))}
-        </div>
+        <AccountOverviewSkeleton />
+        <SummaryMetricsSkeleton />
       </div>
 
       <div className="mt-4 rounded-lg border border-[#e2e2dc]">
@@ -777,43 +955,107 @@ export function PanelSkeleton({ title }: { title: string }) {
           <div className="h-[14px] w-[72px] animate-pulse rounded-md bg-[#ededeb]" />
         </div>
         <div className="overflow-x-auto">
-          <table className="w-full min-w-[440px] border-collapse text-left text-[12px]">
-            <thead className="text-[#6e6e73]">
-              <tr className="border-b border-[#eeeeea]">
-                <th className="px-3 py-2 font-medium">Account</th>
-                <th className="px-3 py-2 font-medium">MRR</th>
-                <th className="px-3 py-2 font-medium">Status</th>
-                <th className="px-3 py-2 font-medium">Requests</th>
-                <th className="px-3 py-2 font-medium">Incidents</th>
-              </tr>
-            </thead>
-            <tbody>
-              {Array.from({ length: 5 }).map((_, index) => (
-                <tr
-                  className={index === 0 ? "bg-[#f5f8fb]" : "border-t border-[#f1f1ed]"}
-                  key={index}
-                >
-                  <td className="px-3 py-2">
-                    <div className="h-[17px] w-[108px] animate-pulse rounded-md bg-[#e2e2dc]" />
-                    <div className="mt-1 h-[14px] w-[82px] animate-pulse rounded-md bg-[#ededeb]" />
-                  </td>
-                  <td className="px-3 py-2">
-                    <div className="h-[17px] w-[58px] animate-pulse rounded-md bg-[#e2e2dc]" />
-                  </td>
-                  <td className="px-3 py-2">
-                    <div className="h-[20px] w-[52px] animate-pulse rounded-full bg-[#ededeb]" />
-                  </td>
-                  <td className="px-3 py-2">
-                    <div className="h-[17px] w-[46px] animate-pulse rounded-md bg-[#e2e2dc]" />
-                  </td>
-                  <td className="px-3 py-2">
-                    <div className="h-[17px] w-[16px] animate-pulse rounded-md bg-[#ededeb]" />
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
+          <AccountsTableSkeleton />
         </div>
+      </div>
+    </div>
+  );
+}
+
+export function AccountOverviewSkeleton() {
+  return (
+    <div className="grid gap-3 border-b border-[#eeeeea] p-4 sm:grid-cols-[1fr_140px]">
+      <div className="flex items-center gap-3">
+        <div className="size-11 animate-pulse rounded-full bg-[#deded9]" />
+        <div>
+          <div className="flex items-center gap-2">
+            <div className="h-[18px] w-[132px] animate-pulse rounded-md bg-[#e2e2dc]" />
+            <div className="h-[20px] w-[58px] animate-pulse rounded-full bg-[#ededeb]" />
+          </div>
+          <div className="mt-2 h-[15px] w-[220px] max-w-full animate-pulse rounded-md bg-[#ededeb]" />
+        </div>
+      </div>
+      <div className="border-l border-[#eeeeea] pl-4">
+        <div className="h-[14px] w-[30px] animate-pulse rounded-md bg-[#ededeb]" />
+        <div className="mt-2 h-[31px] w-[104px] animate-pulse rounded-md bg-[#e2e2dc]" />
+        <div className="mt-2 h-[14px] w-[52px] animate-pulse rounded-md bg-[#ededeb]" />
+      </div>
+    </div>
+  );
+}
+
+export function SummaryMetricsSkeleton() {
+  return (
+    <div className="grid grid-cols-2 gap-2 p-3 lg:grid-cols-4">
+      {Array.from({ length: 4 }).map((_, index) => (
+        <div className="rounded-md border border-[#e4e4df] p-3" key={index}>
+          <div className="h-[14px] w-[64px] animate-pulse rounded-md bg-[#ededeb]" />
+          <div className="mt-2 flex items-end justify-between gap-2">
+            <div className="h-[27px] w-[58px] animate-pulse rounded-md bg-[#e2e2dc]" />
+            <div className="h-[14px] w-[44px] animate-pulse rounded-md bg-[#ededeb]" />
+          </div>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+export function AccountsTableSkeleton() {
+  return (
+    <table className="w-full min-w-[440px] border-collapse text-left text-[12px]">
+      <AccountsTableHeader />
+      <tbody>
+        {Array.from({ length: 5 }).map((_, index) => (
+          <tr className={index === 0 ? "bg-[#f5f8fb]" : "border-t border-[#f1f1ed]"} key={index}>
+            <td className="px-3 py-2">
+              <div className="h-[17px] w-[108px] animate-pulse rounded-md bg-[#e2e2dc]" />
+              <div className="mt-1 h-[14px] w-[82px] animate-pulse rounded-md bg-[#ededeb]" />
+            </td>
+            <td className="px-3 py-2">
+              <div className="h-[17px] w-[58px] animate-pulse rounded-md bg-[#e2e2dc]" />
+            </td>
+            <td className="px-3 py-2">
+              <div className="h-[20px] w-[52px] animate-pulse rounded-full bg-[#ededeb]" />
+            </td>
+            <td className="px-3 py-2">
+              <div className="h-[17px] w-[46px] animate-pulse rounded-md bg-[#e2e2dc]" />
+            </td>
+            <td className="px-3 py-2">
+              <div className="h-[17px] w-[16px] animate-pulse rounded-md bg-[#ededeb]" />
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+function AccountsTableHeader() {
+  return (
+    <thead className="text-[#6e6e73]">
+      <tr className="border-b border-[#eeeeea]">
+        <th className="px-3 py-2 font-medium">Account</th>
+        <th className="px-3 py-2 font-medium">MRR</th>
+        <th className="px-3 py-2 font-medium">Status</th>
+        <th className="px-3 py-2 font-medium">Requests</th>
+        <th className="px-3 py-2 font-medium">Incidents</th>
+      </tr>
+    </thead>
+  );
+}
+
+export function ResourceSectionError({ label, refetch }: { label: string; refetch: () => void }) {
+  return (
+    <div className="m-3 rounded-md border border-[#f1c6c6] bg-[#fff7f7] px-3 py-2 text-[12px] text-[#a12a2a]">
+      <div className="flex items-center justify-between gap-3">
+        <span>{label} failed.</span>
+        <button
+          className="text-[11px] font-semibold text-[#7a1f1f]"
+          onClick={refetch}
+          type="button"
+        >
+          Retry
+        </button>
       </div>
     </div>
   );

@@ -2,8 +2,16 @@ export type StrategyId = "client-loader" | "jotai-use" | "swr" | "use-effect";
 
 export type ScenarioMode = "normal" | "slow" | "error" | "race";
 
+export type ResourceKey = "account" | "accounts" | "summary";
+
+export type ResourceLatencies = Record<ResourceKey, number>;
+
+export type ResourceErrors = Record<ResourceKey, boolean>;
+
 export type SimulatorSettings = {
   latency: number;
+  resourceLatencies: ResourceLatencies;
+  resourceErrors: ResourceErrors;
   error: boolean;
   race: boolean;
   strict: boolean;
@@ -40,6 +48,14 @@ export type DashboardPayload = {
     requests: number;
     errorRate: number;
   };
+};
+
+export type DashboardSummary = DashboardPayload["summary"];
+
+export type DashboardResources = {
+  account: Account;
+  accounts: Account[];
+  summary: DashboardSummary;
 };
 
 export type StrategyMeta = {
@@ -158,14 +174,34 @@ export const strategies: StrategyMeta[] = [
 ];
 
 export const defaultSettings: SimulatorSettings = {
-  latency: 650,
+  latency: 1100,
+  resourceLatencies: {
+    account: 350,
+    accounts: 1100,
+    summary: 650,
+  },
+  resourceErrors: {
+    account: false,
+    accounts: false,
+    summary: false,
+  },
   error: false,
   race: false,
   strict: true,
   seed: 1,
 };
 
-const dashboardFixtureUrl = "/api/account-dashboard.json";
+const resourceUrls = {
+  account: "/api/account.json",
+  accounts: "/api/accounts.json",
+  summary: "/api/summary.json",
+} as const;
+
+export const resourceSpecs = [
+  { key: "account", label: "Account", path: resourceUrls.account },
+  { key: "accounts", label: "Accounts", path: resourceUrls.accounts },
+  { key: "summary", label: "Summary", path: resourceUrls.summary },
+] satisfies Array<{ key: ResourceKey; label: string; path: string }>;
 
 const baseAccounts: Account[] = [
   {
@@ -221,11 +257,31 @@ export function getStrategy(id: StrategyId) {
 
 export function parseSettings(searchParams: URLSearchParams): SimulatorSettings {
   const mode = searchParams.get("mode") as ScenarioMode | null;
-  const latencyFromMode = mode === "slow" ? 1200 : defaultSettings.latency;
+  const resourceDefaults =
+    mode === "slow"
+      ? {
+          account: 850,
+          accounts: 1500,
+          summary: 1150,
+        }
+      : defaultSettings.resourceLatencies;
+  const resourceLatencies = {
+    account: parseResourceLatency(searchParams, "accountLatency", resourceDefaults.account),
+    accounts: parseResourceLatency(searchParams, "accountsLatency", resourceDefaults.accounts),
+    summary: parseResourceLatency(searchParams, "summaryLatency", resourceDefaults.summary),
+  };
+  const allResourcesError = searchParams.get("error") === "1" || mode === "error";
+  const resourceErrors = {
+    account: parseResourceError(searchParams, "accountError", allResourcesError),
+    accounts: parseResourceError(searchParams, "accountsError", allResourcesError),
+    summary: parseResourceError(searchParams, "summaryError", allResourcesError),
+  };
 
   return {
-    latency: clamp(Number(searchParams.get("latency") ?? latencyFromMode), 0, 1500),
-    error: searchParams.get("error") === "1" || mode === "error",
+    latency: maxResourceLatency(resourceLatencies),
+    resourceLatencies,
+    resourceErrors,
+    error: hasResourceError(resourceErrors),
     race: searchParams.get("race") === "1" || mode === "race",
     strict: true,
     seed: Number(searchParams.get("seed") ?? defaultSettings.seed),
@@ -234,9 +290,13 @@ export function parseSettings(searchParams: URLSearchParams): SimulatorSettings 
 
 export function settingsToSearch(settings: SimulatorSettings) {
   const next = new URLSearchParams();
-  next.set("latency", String(settings.latency));
+  next.set("accountLatency", String(settings.resourceLatencies.account));
+  next.set("accountsLatency", String(settings.resourceLatencies.accounts));
+  next.set("summaryLatency", String(settings.resourceLatencies.summary));
+  if (settings.resourceErrors.account) next.set("accountError", "1");
+  if (settings.resourceErrors.accounts) next.set("accountsError", "1");
+  if (settings.resourceErrors.summary) next.set("summaryError", "1");
   next.set("seed", String(settings.seed));
-  if (settings.error) next.set("error", "1");
   if (settings.race) next.set("race", "1");
   return next;
 }
@@ -246,29 +306,44 @@ export async function fetchAccountDashboard(
   settings: SimulatorSettings,
   signal?: AbortSignal,
 ) {
-  await wait(settings.latency, signal);
+  const [account, accounts, summary] = await Promise.all([
+    fetchAccountResource(strategyId, settings, signal),
+    fetchAccountsResource(strategyId, settings, signal),
+    fetchSummaryResource(strategyId, settings, signal),
+  ]);
 
-  if (settings.error) {
-    throw new Error("Simulated 500 response from /api/accounts/:id");
-  }
+  return composeDashboardPayload({ account, accounts, summary }, strategyId, settings);
+}
 
-  const response = await fetch(dashboardFixtureUrl, { signal });
+export function fetchAccountResource(
+  _strategyId: StrategyId,
+  settings: SimulatorSettings,
+  signal?: AbortSignal,
+) {
+  return fetchResource<Account>("account", settings, signal);
+}
 
-  if (!response.ok) {
-    throw new Error(`Unexpected ${response.status} response from ${dashboardFixtureUrl}`);
-  }
+export function fetchAccountsResource(
+  _strategyId: StrategyId,
+  settings: SimulatorSettings,
+  signal?: AbortSignal,
+) {
+  return fetchResource<Account[]>("accounts", settings, signal);
+}
 
-  const payload = (await response.json()) as DashboardPayload;
-  return applyScenarioPayload(payload, strategyId, settings);
+export function fetchSummaryResource(
+  _strategyId: StrategyId,
+  settings: SimulatorSettings,
+  signal?: AbortSignal,
+) {
+  return fetchResource<DashboardSummary>("summary", settings, signal);
 }
 
 export function makePayload(strategyId: StrategyId, settings: SimulatorSettings): DashboardPayload {
-  return applyScenarioPayload(
+  return composeDashboardPayload(
     {
       account: baseAccounts[0],
       accounts: baseAccounts,
-      logs: [],
-      generatedAt: "fixture",
       summary: {
         users: 128,
         projects: 24,
@@ -281,39 +356,79 @@ export function makePayload(strategyId: StrategyId, settings: SimulatorSettings)
   );
 }
 
-function applyScenarioPayload(
-  payload: DashboardPayload,
+export function composeDashboardPayload(
+  resources: DashboardResources,
   strategyId: StrategyId,
   settings: SimulatorSettings,
 ): DashboardPayload {
-  const account = payload.account;
-  const requestBump = settings.seed * 7;
+  const { account, accounts, summary } = resources;
   const logs = makeLogs(strategyId, settings);
 
   return {
-    account: {
-      ...account,
-      requests: account.requests + requestBump,
-      mrr: account.mrr + settings.seed * 120,
-    },
-    accounts: payload.accounts.map((item, index) => ({
-      ...item,
-      requests: item.requests + settings.seed * (index + 2),
-      mrr: item.mrr + settings.seed * (index + 1) * 40,
-    })),
+    account: composeAccount(account, settings),
+    accounts: composeAccounts(accounts, settings),
     logs,
-    generatedAt: new Date().toLocaleTimeString("en-US", {
-      hour: "2-digit",
-      minute: "2-digit",
-      second: "2-digit",
-    }),
-    summary: {
-      users: payload.summary.users + settings.seed,
-      projects: payload.summary.projects + (settings.seed % 4),
-      requests: payload.summary.requests + requestBump,
-      errorRate: settings.error ? 3.8 : payload.summary.errorRate + settings.seed * 0.01,
-    },
+    generatedAt: generatedTime(),
+    summary: composeSummary(summary, settings),
   };
+}
+
+export function composeAccount(account: Account, settings: SimulatorSettings): Account {
+  return {
+    ...account,
+    requests: account.requests + settings.seed * 7,
+    mrr: account.mrr + settings.seed * 120,
+  };
+}
+
+export function composeAccounts(accounts: Account[], settings: SimulatorSettings): Account[] {
+  return accounts.map((item, index) => ({
+    ...item,
+    requests: item.requests + settings.seed * (index + 2),
+    mrr: item.mrr + settings.seed * (index + 1) * 40,
+  }));
+}
+
+export function composeSummary(
+  summary: DashboardSummary,
+  settings: SimulatorSettings,
+): DashboardSummary {
+  return {
+    users: summary.users + settings.seed,
+    projects: summary.projects + (settings.seed % 4),
+    requests: summary.requests + settings.seed * 7,
+    errorRate: settings.resourceErrors.summary ? 3.8 : summary.errorRate + settings.seed * 0.01,
+  };
+}
+
+export function generatedTime() {
+  return new Date().toLocaleTimeString("en-US", {
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+  });
+}
+
+async function fetchResource<T>(
+  resource: ResourceKey,
+  settings: SimulatorSettings,
+  signal?: AbortSignal,
+): Promise<T> {
+  const url = resourceUrls[resource];
+
+  await wait(settings.resourceLatencies[resource], signal);
+
+  if (settings.resourceErrors[resource]) {
+    throw new Error(`Simulated 500 response from ${url}`);
+  }
+
+  const response = await fetch(url, { signal });
+
+  if (!response.ok) {
+    throw new Error(`Unexpected ${response.status} response from ${url}`);
+  }
+
+  return (await response.json()) as T;
 }
 
 function makeLogs(strategyId: StrategyId, settings: SimulatorSettings): RequestLog[] {
@@ -346,6 +461,24 @@ function makeLogs(strategyId: StrategyId, settings: SimulatorSettings): RequestL
       size: status === "500 Error" ? "1.2 KB" : "24.1 KB",
     };
   });
+}
+
+function parseResourceLatency(searchParams: URLSearchParams, key: string, fallback: number) {
+  return clamp(Number(searchParams.get(key) ?? searchParams.get("latency") ?? fallback), 0, 2000);
+}
+
+function parseResourceError(searchParams: URLSearchParams, key: string, fallback: boolean) {
+  const value = searchParams.get(key);
+  if (value === null) return fallback;
+  return value === "1";
+}
+
+function hasResourceError(resourceErrors: ResourceErrors) {
+  return resourceErrors.account || resourceErrors.accounts || resourceErrors.summary;
+}
+
+function maxResourceLatency(resourceLatencies: ResourceLatencies) {
+  return Math.max(resourceLatencies.account, resourceLatencies.accounts, resourceLatencies.summary);
 }
 
 function wait(ms: number, signal?: AbortSignal) {
