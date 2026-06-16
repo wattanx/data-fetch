@@ -80,22 +80,38 @@ const codeSamples: Record<StrategyId, Record<string, string>> = {
 
 export default function Route() {
   const resources = useLoaderData<typeof clientLoader>();
+  const controls = useDashboardControls();
 
   return (
     <DashboardPanel
       account={
         <Suspense fallback={<AccountSkeleton />}>
-          <Await resolve={resources.account}>{(data) => <AccountHeader data={data} />}</Await>
+          <Await
+            resolve={resources.account}
+            errorElement={<ResourceError label="Account" onRetry={controls.refetch} />}
+          >
+            {(data) => <AccountHeader data={data} />}
+          </Await>
         </Suspense>
       }
       summary={
         <Suspense fallback={<SummarySkeleton />}>
-          <Await resolve={resources.summary}>{(data) => <Metrics data={data} />}</Await>
+          <Await
+            resolve={resources.summary}
+            errorElement={<ResourceError label="Summary" onRetry={controls.refetch} />}
+          >
+            {(data) => <Metrics data={data} />}
+          </Await>
         </Suspense>
       }
       accounts={
         <Suspense fallback={<AccountsSkeleton />}>
-          <Await resolve={resources.accounts}>{(data) => <AccountsTable data={data} />}</Await>
+          <Await
+            resolve={resources.accounts}
+            errorElement={<ResourceError label="Accounts" onRetry={controls.refetch} />}
+          >
+            {(data) => <AccountsTable data={data} />}
+          </Await>
         </Suspense>
       }
     />
@@ -150,9 +166,27 @@ function Route() {
   const key = settingsKey(settings);
   return (
     <DashboardPanel
-      account={<ResourceBoundary><Suspense fallback={<AccountSkeleton />}><AccountSection atomKey={key} /></Suspense></ResourceBoundary>}
-      summary={<ResourceBoundary><Suspense fallback={<SummarySkeleton />}><SummarySection atomKey={key} /></Suspense></ResourceBoundary>}
-      accounts={<ResourceBoundary><Suspense fallback={<AccountsSkeleton />}><AccountsSection atomKey={key} /></Suspense></ResourceBoundary>}
+      account={
+        <ResourceBoundary fallback={<ResourceError label="Account" />}>
+          <Suspense fallback={<AccountSkeleton />}>
+            <AccountSection atomKey={key} />
+          </Suspense>
+        </ResourceBoundary>
+      }
+      summary={
+        <ResourceBoundary fallback={<ResourceError label="Summary" />}>
+          <Suspense fallback={<SummarySkeleton />}>
+            <SummarySection atomKey={key} />
+          </Suspense>
+        </ResourceBoundary>
+      }
+      accounts={
+        <ResourceBoundary fallback={<ResourceError label="Accounts" />}>
+          <Suspense fallback={<AccountsSkeleton />}>
+            <AccountsSection atomKey={key} />
+          </Suspense>
+        </ResourceBoundary>
+      }
     />
   );
 }`,
@@ -172,7 +206,8 @@ function AccountsSection({ atomKey }: { atomKey: string }) {
 }
 
 // Do not combine these with Promise.all inside one atom.
-// Split atoms let each Suspense boundary reveal independently.`,
+// Split atoms let each Suspense boundary reveal independently.
+// Each boundary catches only the resource it wraps.`,
     "notes.md": `Good fit:
 - shared client resources
 - Suspense-first loading
@@ -189,9 +224,21 @@ const summary = useSWR(["summary", key], () => fetchSummaryResource("swr", setti
 
 return (
   <DashboardPanel
-    account={account.data ? <AccountHeader data={account.data} /> : <AccountSkeleton />}
-    summary={summary.data ? <Metrics data={summary.data} /> : <SummarySkeleton />}
-    accounts={accounts.data ? <AccountsTable data={accounts.data} /> : <AccountsSkeleton />}
+    account={
+      account.error ? <ResourceError label="Account" onRetry={mutateAll} />
+      : account.data ? <AccountHeader data={account.data} />
+      : <AccountSkeleton />
+    }
+    summary={
+      summary.error ? <ResourceError label="Summary" onRetry={mutateAll} />
+      : summary.data ? <Metrics data={summary.data} />
+      : <SummarySkeleton />
+    }
+    accounts={
+      accounts.error ? <ResourceError label="Accounts" onRetry={mutateAll} />
+      : accounts.data ? <AccountsTable data={accounts.data} />
+      : <AccountsSkeleton />
+    }
   />
 );`,
     "swr.ts": `useSWR(key, fetcher, {
@@ -209,11 +256,21 @@ The caveat is ownership: route loaders and SWR can both think they own freshness
   setAccount(null);
   setAccounts(null);
   setSummary(null);
+  setErrors({});
 
-  fetchAccountResource("use-effect", settings).then(setAccount).catch(setAccountError);
-  fetchAccountsResource("use-effect", settings).then(setAccounts).catch(setAccountsError);
-  fetchSummaryResource("use-effect", settings).then(setSummary).catch(setSummaryError);
+  fetchAccountResource("use-effect", settings)
+    .then(setAccount)
+    .catch((error) => setErrors((e) => ({ ...e, account: error })));
+  fetchAccountsResource("use-effect", settings)
+    .then(setAccounts)
+    .catch((error) => setErrors((e) => ({ ...e, accounts: error })));
+  fetchSummaryResource("use-effect", settings)
+    .then(setSummary)
+    .catch((error) => setErrors((e) => ({ ...e, summary: error })));
 }, [settings]);
+
+const accountNode = errors.account ? <ResourceError label="Account" /> :
+  account ? <AccountHeader data={account} /> : <AccountSkeleton />;
 
 // Progressive rendering is possible, but abort, cache, dedupe,
 // and race protection are still manual responsibilities.`,

@@ -61,85 +61,88 @@ export function ErrorBoundary() {
 export default function ClientLoaderRoute() {
   const controls = useDashboardControls();
   const { account, accounts, summary } = useLoaderData<typeof clientLoader>();
-  const accountResource = useMemo(
-    () => Promise.resolve(account).then((data) => composeAccount(data, controls.settings)),
-    [
-      account,
-      controls.settings.resourceLatencies.account,
-      controls.settings.resourceErrors.account,
-      controls.settings.race,
-      controls.settings.seed,
-      controls.settings.strict,
-    ],
-  );
-  const accountsResource = useMemo(
-    () => Promise.resolve(accounts).then((data) => composeAccounts(data, controls.settings)),
-    [
-      accounts,
-      controls.settings.resourceLatencies.accounts,
-      controls.settings.resourceErrors.accounts,
-      controls.settings.race,
-      controls.settings.seed,
-      controls.settings.strict,
-    ],
-  );
-  const summaryResource = useMemo(
-    () => Promise.resolve(summary).then((data) => composeSummary(data, controls.settings)),
-    [
-      summary,
-      controls.settings.resourceLatencies.summary,
-      controls.settings.resourceErrors.summary,
-      controls.settings.race,
-      controls.settings.seed,
-      controls.settings.strict,
-    ],
-  );
+  const accountResource = useMemo(() => {
+    if (controls.settings.resourceErrors.account) {
+      return Promise.reject(new Error("Simulated 500 response from /api/account.json"));
+    }
+    return Promise.resolve(account).then((data) => composeAccount(data, controls.settings));
+  }, [
+    account,
+    controls.settings.resourceLatencies.account,
+    controls.settings.resourceErrors.account,
+    controls.settings.race,
+    controls.settings.seed,
+    controls.settings.strict,
+  ]);
+  const accountsResource = useMemo(() => {
+    if (controls.settings.resourceErrors.accounts) {
+      return Promise.reject(new Error("Simulated 500 response from /api/accounts.json"));
+    }
+    return Promise.resolve(accounts).then((data) => composeAccounts(data, controls.settings));
+  }, [
+    accounts,
+    controls.settings.resourceLatencies.accounts,
+    controls.settings.resourceErrors.accounts,
+    controls.settings.race,
+    controls.settings.seed,
+    controls.settings.strict,
+  ]);
+  const summaryResource = useMemo(() => {
+    if (controls.settings.resourceErrors.summary) {
+      return Promise.reject(new Error("Simulated 500 response from /api/summary.json"));
+    }
+    return Promise.resolve(summary).then((data) => composeSummary(data, controls.settings));
+  }, [
+    summary,
+    controls.settings.resourceLatencies.summary,
+    controls.settings.resourceErrors.summary,
+    controls.settings.race,
+    controls.settings.seed,
+    controls.settings.strict,
+  ]);
 
   return (
     <DashboardPage activeStrategy="client-loader" controls={controls}>
       <ProgressiveDataPanel
         account={
-          controls.settings.resourceErrors.account ? (
-            <ResourceSectionError label="Account" refetch={controls.refetch} />
-          ) : (
-            <Suspense fallback={<AccountOverviewSkeleton />}>
-              <Await
-                resolve={accountResource}
-                errorElement={<ResourceSectionError label="Account" refetch={controls.refetch} />}
-              >
-                {(data) => <AccountOverviewSection account={data} />}
-              </Await>
-            </Suspense>
-          )
+          <Suspense
+            fallback={<AccountOverviewSkeleton />}
+            key={`account:${controls.settings.resourceErrors.account}:${controls.settings.seed}:${controls.settings.resourceLatencies.account}`}
+          >
+            <Await
+              resolve={accountResource}
+              errorElement={<ResourceSectionError label="Account" refetch={controls.refetch} />}
+            >
+              {(data) => <AccountOverviewSection account={data} />}
+            </Await>
+          </Suspense>
         }
         accounts={
-          controls.settings.resourceErrors.accounts ? (
-            <ResourceSectionError label="Accounts" refetch={controls.refetch} />
-          ) : (
-            <Suspense fallback={<AccountsTableSkeleton />}>
-              <Await
-                resolve={accountsResource}
-                errorElement={<ResourceSectionError label="Accounts" refetch={controls.refetch} />}
-              >
-                {(data) => <AccountsTableSection accounts={data} />}
-              </Await>
-            </Suspense>
-          )
+          <Suspense
+            fallback={<AccountsTableSkeleton />}
+            key={`accounts:${controls.settings.resourceErrors.accounts}:${controls.settings.seed}:${controls.settings.resourceLatencies.accounts}`}
+          >
+            <Await
+              resolve={accountsResource}
+              errorElement={<ResourceSectionError label="Accounts" refetch={controls.refetch} />}
+            >
+              {(data) => <AccountsTableSection accounts={data} />}
+            </Await>
+          </Suspense>
         }
         badge="Progressive"
         summary={
-          controls.settings.resourceErrors.summary ? (
-            <ResourceSectionError label="Summary" refetch={controls.refetch} />
-          ) : (
-            <Suspense fallback={<SummaryMetricsSkeleton />}>
-              <Await
-                resolve={summaryResource}
-                errorElement={<ResourceSectionError label="Summary" refetch={controls.refetch} />}
-              >
-                {(data) => <SummaryMetricSection summary={data} />}
-              </Await>
-            </Suspense>
-          )
+          <Suspense
+            fallback={<SummaryMetricsSkeleton />}
+            key={`summary:${controls.settings.resourceErrors.summary}:${controls.settings.seed}:${controls.settings.resourceLatencies.summary}`}
+          >
+            <Await
+              resolve={summaryResource}
+              errorElement={<ResourceSectionError label="Summary" refetch={controls.refetch} />}
+            >
+              {(data) => <SummaryMetricSection summary={data} />}
+            </Await>
+          </Suspense>
         }
       />
     </DashboardPage>
