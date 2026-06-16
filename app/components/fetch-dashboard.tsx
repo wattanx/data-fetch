@@ -58,15 +58,23 @@ const routeTabs = [
 
 const codeSamples: Record<StrategyId, Record<string, string>> = {
   "client-loader": {
-    "route.tsx": `export async function clientLoader({ request }: Route.ClientLoaderArgs) {
+    "route.tsx": `export function clientLoader({ request }: Route.ClientLoaderArgs) {
   const settings = parseSettings(new URL(request.url).searchParams);
-  const account = await fetchAccountDashboard("client-loader", settings, request.signal);
-  return account;
+  return {
+    account: fetchAccountDashboard("client-loader", settings, request.signal),
+  };
 }
 
 export default function Route() {
-  const data = useLoaderData<typeof clientLoader>();
-  return <AccountView data={data} />;
+  const { account } = useLoaderData<typeof clientLoader>();
+
+  return (
+    <Suspense fallback={<AccountSkeleton />}>
+      <Await resolve={account}>
+        {(data) => <AccountView data={data} />}
+      </Await>
+    </Suspense>
+  );
 }`,
     "api.ts": `export async function fetchAccountDashboard(strategy, settings, signal) {
   await wait(settings.latency, signal);
@@ -74,9 +82,10 @@ export default function Route() {
   return makePayload(strategy, settings);
 }`,
     "notes.md": `Why this works:
-- data resolves before the route renders
+- the route shell renders before slow data resolves
+- Suspense owns the data panel fallback
 - navigation cancellation is owned by the router
-- errors flow into route error boundaries
+- promise errors can render with Await errorElement
 - revalidation is explicit instead of component-local`,
   },
   "jotai-use": {
@@ -735,10 +744,80 @@ export function PanelSkeleton({ title }: { title: string }) {
   return (
     <div className="min-w-0 border-r border-[#e7e7e2] p-4">
       <SectionTitle title={title} badge="Loading" />
-      <div className="grid gap-3 rounded-lg border border-[#e2e2dc] p-4">
-        {Array.from({ length: 8 }).map((_, index) => (
-          <div className="h-7 animate-pulse rounded-md bg-[#ededeb]" key={index} />
-        ))}
+      <div className="rounded-lg border border-[#e2e2dc]">
+        <div className="grid gap-3 border-b border-[#eeeeea] p-4 sm:grid-cols-[1fr_140px]">
+          <div className="flex items-center gap-3">
+            <div className="size-11 animate-pulse rounded-full bg-[#deded9]" />
+            <div>
+              <div className="flex items-center gap-2">
+                <div className="h-[18px] w-[132px] animate-pulse rounded-md bg-[#e2e2dc]" />
+                <div className="h-[20px] w-[58px] animate-pulse rounded-full bg-[#ededeb]" />
+              </div>
+              <div className="mt-2 h-[15px] w-[220px] max-w-full animate-pulse rounded-md bg-[#ededeb]" />
+            </div>
+          </div>
+          <div className="border-l border-[#eeeeea] pl-4">
+            <div className="h-[14px] w-[30px] animate-pulse rounded-md bg-[#ededeb]" />
+            <div className="mt-2 h-[31px] w-[104px] animate-pulse rounded-md bg-[#e2e2dc]" />
+            <div className="mt-2 h-[14px] w-[52px] animate-pulse rounded-md bg-[#ededeb]" />
+          </div>
+        </div>
+        <div className="grid grid-cols-2 gap-2 p-3 lg:grid-cols-4">
+          {Array.from({ length: 4 }).map((_, index) => (
+            <div className="rounded-md border border-[#e4e4df] p-3" key={index}>
+              <div className="h-[14px] w-[64px] animate-pulse rounded-md bg-[#ededeb]" />
+              <div className="mt-2 flex items-end justify-between gap-2">
+                <div className="h-[27px] w-[58px] animate-pulse rounded-md bg-[#e2e2dc]" />
+                <div className="h-[14px] w-[44px] animate-pulse rounded-md bg-[#ededeb]" />
+              </div>
+            </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="mt-4 rounded-lg border border-[#e2e2dc]">
+        <div className="flex items-center justify-between border-b border-[#eeeeea] px-3 py-2">
+          <h3 className="text-[13px] font-semibold">Recent Accounts</h3>
+          <div className="h-[14px] w-[72px] animate-pulse rounded-md bg-[#ededeb]" />
+        </div>
+        <div className="overflow-x-auto">
+          <table className="w-full min-w-[440px] border-collapse text-left text-[12px]">
+            <thead className="text-[#6e6e73]">
+              <tr className="border-b border-[#eeeeea]">
+                <th className="px-3 py-2 font-medium">Account</th>
+                <th className="px-3 py-2 font-medium">MRR</th>
+                <th className="px-3 py-2 font-medium">Status</th>
+                <th className="px-3 py-2 font-medium">Requests</th>
+                <th className="px-3 py-2 font-medium">Incidents</th>
+              </tr>
+            </thead>
+            <tbody>
+              {Array.from({ length: 5 }).map((_, index) => (
+                <tr
+                  className={index === 0 ? "bg-[#f5f8fb]" : "border-t border-[#f1f1ed]"}
+                  key={index}
+                >
+                  <td className="px-3 py-2">
+                    <div className="h-[17px] w-[108px] animate-pulse rounded-md bg-[#e2e2dc]" />
+                    <div className="mt-1 h-[14px] w-[82px] animate-pulse rounded-md bg-[#ededeb]" />
+                  </td>
+                  <td className="px-3 py-2">
+                    <div className="h-[17px] w-[58px] animate-pulse rounded-md bg-[#e2e2dc]" />
+                  </td>
+                  <td className="px-3 py-2">
+                    <div className="h-[20px] w-[52px] animate-pulse rounded-full bg-[#ededeb]" />
+                  </td>
+                  <td className="px-3 py-2">
+                    <div className="h-[17px] w-[46px] animate-pulse rounded-md bg-[#e2e2dc]" />
+                  </td>
+                  <td className="px-3 py-2">
+                    <div className="h-[17px] w-[16px] animate-pulse rounded-md bg-[#ededeb]" />
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>
   );

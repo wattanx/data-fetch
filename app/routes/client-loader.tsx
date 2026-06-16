@@ -1,7 +1,9 @@
-import { useLoaderData, useRouteError } from "react-router";
+import { Suspense } from "react";
+import { Await, useAsyncError, useLoaderData, useRouteError } from "react-router";
 import {
   DashboardPage,
   ErrorPanel,
+  PanelSkeleton,
   ResolvedDataPanel,
   useDashboardControls,
 } from "../components/fetch-dashboard";
@@ -12,9 +14,11 @@ export function meta() {
   return [{ title: "clientLoader | Fetch Strategy Studio" }];
 }
 
-export async function clientLoader({ request }: Route.ClientLoaderArgs) {
+export function clientLoader({ request }: Route.ClientLoaderArgs) {
   const settings = parseSettings(new URL(request.url).searchParams);
-  return fetchAccountDashboard("client-loader", settings, request.signal);
+  return {
+    account: fetchAccountDashboard("client-loader", settings, request.signal),
+  };
 }
 
 export function ErrorBoundary() {
@@ -31,15 +35,25 @@ export function ErrorBoundary() {
 
 export default function ClientLoaderRoute() {
   const controls = useDashboardControls();
-  const data = useLoaderData<typeof clientLoader>();
+  const { account } = useLoaderData<typeof clientLoader>();
 
   return (
-    <DashboardPage
-      activeStrategy="client-loader"
-      controls={controls}
-      generatedAt={data.generatedAt}
-    >
-      <ResolvedDataPanel data={data} />
+    <DashboardPage activeStrategy="client-loader" controls={controls}>
+      <Suspense fallback={<PanelSkeleton title="clientLoader promise is resolving" />}>
+        <Await
+          resolve={account}
+          errorElement={<ClientLoaderAwaitError refetch={controls.refetch} />}
+        >
+          {(data) => <ResolvedDataPanel data={data} />}
+        </Await>
+      </Suspense>
     </DashboardPage>
   );
+}
+
+function ClientLoaderAwaitError({ refetch }: { refetch: () => void }) {
+  const error = useAsyncError();
+  const message = error instanceof Error ? error.message : "The deferred clientLoader failed.";
+
+  return <ErrorPanel message={message} refetch={refetch} title="Await Error Boundary" />;
 }
