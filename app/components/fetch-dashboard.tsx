@@ -1,21 +1,18 @@
 import {
   AlertTriangle,
-  BookOpen,
   Check,
-  ChevronDown,
-  CirclePause,
   Code2,
-  Database,
-  ExternalLink,
   GitBranch,
   ListRestart,
   Monitor,
   RefreshCw,
   Route,
+  SlidersHorizontal,
   Sparkles,
+  X,
   Zap,
 } from "lucide-react";
-import { Component, Suspense, use, useEffect, useState, type ReactNode } from "react";
+import { Component, Suspense, useEffect, useState, type ReactNode } from "react";
 import { atom, Provider, useAtomValue } from "jotai";
 import { atomFamily } from "jotai/utils";
 import useSWR from "swr";
@@ -33,6 +30,15 @@ import {
   type StrategyMeta,
 } from "../lib/fetch-lab";
 import { Link, NavLink, useNavigate, useSearchParams } from "react-router";
+import {
+  Popover,
+  PopoverClose,
+  PopoverContent,
+  PopoverDescription,
+  PopoverHeader,
+  PopoverTitle,
+  PopoverTrigger,
+} from "./ui/popover";
 
 type FetchDashboardProps = {
   activeStrategy: StrategyId;
@@ -42,7 +48,7 @@ type FetchDashboardProps = {
 
 const routeTabs = [
   { to: "/client-loader", label: "Monitor", icon: Monitor, strategy: "client-loader" },
-  { to: "/jotai-use", label: "Jotai + use", icon: Sparkles, strategy: "jotai-use" },
+  { to: "/jotai-use", label: "Jotai async atom", icon: Sparkles, strategy: "jotai-use" },
   { to: "/swr", label: "SWR", icon: ListRestart, strategy: "swr" },
   { to: "/use-effect", label: "useEffect", icon: AlertTriangle, strategy: "use-effect" },
 ] satisfies Array<{ to: string; label: string; icon: typeof Monitor; strategy: StrategyId }>;
@@ -71,28 +77,25 @@ export default function Route() {
 - revalidation is explicit instead of component-local`,
   },
   "jotai-use": {
-    "route.tsx": `const dashboardResourceAtom = atomFamily((key: string) =>
-  atom({
-    promise: fetchAccountDashboard("jotai-use", parseSettingsKey(key)),
-  })
+    "route.tsx": `const dashboardAtom = atomFamily((key: string) =>
+  atom(async () => fetchAccountDashboard("jotai-use", parseSettingsKey(key)))
 );
 
 function AccountResource({ settings }) {
-  const resource = useAtomValue(dashboardResourceAtom(settingsKey(settings)));
-  const data = use(resource.promise);
+  const data = useAtomValue(dashboardAtom(settingsKey(settings)));
   return <AccountView data={data} />;
 }`,
     "atom.ts": `const userAtom = atomFamily((userId: string) =>
   atom(async () => fetchUser(userId))
 );
 
-const accountResourceAtom = atomFamily((key: string) =>
-  atom({ promise: fetchAccountDashboard("jotai-use", parseSettingsKey(key)) })
+const accountAtom = atomFamily((key: string) =>
+  atom(async () => fetchAccountDashboard("jotai-use", parseSettingsKey(key)))
 );
 
 // Fixed data: define the async atom outside.
 // Parameterized data: use atomFamily.
-// React use() can unwrap a Promise resource when you want that pattern.`,
+// useAtomValue suspends and returns the resolved value.`,
     "notes.md": `Good fit:
 - shared client resources
 - Suspense-first loading
@@ -168,32 +171,12 @@ export function FetchDashboard({ activeStrategy, loaderData, loaderError }: Fetc
       <TopBar />
       <div className="mx-auto flex w-full max-w-[1480px] flex-col gap-4 px-4 py-4">
         <section className="flex flex-col gap-3">
-          <div className="flex flex-col justify-between gap-3 lg:flex-row lg:items-end">
+          <div>
             <div>
-              <div className="flex items-center gap-2">
-                <h1 className="text-[17px] font-semibold tracking-normal">Experience Monitor</h1>
-                <span className="rounded-full border border-[#d8d8d2] bg-white px-2 py-0.5 text-[11px] font-medium text-[#656565]">
-                  no useEffect first
-                </span>
-              </div>
+              <h1 className="text-[17px] font-semibold tracking-normal">Experience Monitor</h1>
               <p className="mt-1 text-[13px] text-[#6e6e73]">
                 Side-by-side comparison of data fetching strategies for SaaS dashboards.
               </p>
-            </div>
-            <div className="flex flex-wrap items-center gap-2">
-              <ToolbarButton
-                icon={Database}
-                label="Last 15 minutes"
-                suffix={<ChevronDown size={14} />}
-              />
-              <ToolbarButton icon={RefreshCw} label="Auto-refresh" />
-              <button
-                className="flex size-8 items-center justify-center rounded-md border border-[#d8d8d2] bg-white text-[#424245]"
-                type="button"
-                aria-label="Pause auto refresh"
-              >
-                <CirclePause size={15} />
-              </button>
             </div>
           </div>
         </section>
@@ -206,19 +189,12 @@ export function FetchDashboard({ activeStrategy, loaderData, loaderError }: Fetc
                 Selected
               </span>
             </div>
-            <div className="flex items-center gap-2 text-[12px] text-[#6e6e73]">
+            <div className="text-[12px] text-[#6e6e73]">
               <span>Generated {loaderData?.generatedAt ?? "live"}</span>
-              <button
-                className="rounded-md border border-[#d8d8d2] px-2.5 py-1 font-medium text-[#1d1d1f]"
-                type="button"
-                onClick={reset}
-              >
-                Reset
-              </button>
             </div>
           </div>
 
-          <div className="grid gap-0 xl:grid-cols-[1.05fr_1fr_1.15fr]">
+          <div className="grid gap-0 xl:grid-cols-[0.92fr_1.08fr]">
             <DashboardDataPanel
               activeStrategy={activeStrategy}
               loaderData={loaderData}
@@ -226,7 +202,6 @@ export function FetchDashboard({ activeStrategy, loaderData, loaderError }: Fetc
               settings={settings}
               refetch={refetch}
             />
-            <SimulatorPanel settings={settings} updateSettings={updateSettings} refetch={refetch} />
             <ImplementationPanel
               activeStrategy={activeStrategy}
               activeCodeTab={activeCodeTab}
@@ -245,6 +220,12 @@ export function FetchDashboard({ activeStrategy, loaderData, loaderError }: Fetc
           <StrategyGrid activeStrategy={activeStrategy} navigate={navigate} settings={settings} />
         </section>
       </div>
+      <FloatingTweaks
+        refetch={refetch}
+        reset={reset}
+        settings={settings}
+        updateSettings={updateSettings}
+      />
     </main>
   );
 }
@@ -279,23 +260,16 @@ function TopBar() {
             </NavLink>
           ))}
         </nav>
-        <div className="ml-auto hidden items-center gap-2 lg:flex">
-          <button
-            className="flex items-center gap-2 rounded-md border border-[#d8d8d2] bg-white px-3 py-1.5 text-[12px] font-medium"
-            type="button"
+        <div className="ml-auto flex items-center">
+          <a
+            className="flex items-center gap-2 rounded-md border border-[#d8d8d2] bg-white px-3 py-1.5 text-[12px] font-medium text-[#1d1d1f]"
+            href="https://github.com/wattanx/data-fetch"
+            rel="noreferrer"
+            target="_blank"
           >
-            <span className="size-1.5 rounded-full bg-[#21a038]" />
-            Production
-            <ChevronDown size={14} />
-          </button>
-          <ToolbarButton icon={GitBranch} label="GitHub" />
-          <ToolbarButton icon={BookOpen} label="Docs" />
-          <button
-            className="flex size-8 items-center justify-center rounded-full bg-[#eeeeeb] text-[12px] font-semibold"
-            type="button"
-          >
-            AK
-          </button>
+            <GitBranch size={14} />
+            GitHub
+          </a>
         </div>
       </div>
     </header>
@@ -456,7 +430,7 @@ function DashboardDataPanel({
   }
 
   if (activeStrategy === "client-loader" && loaderData) {
-    return <ResolvedDataPanel data={loaderData} refetch={refetch} />;
+    return <ResolvedDataPanel data={loaderData} />;
   }
 
   if (activeStrategy === "client-loader") {
@@ -468,7 +442,7 @@ function DashboardDataPanel({
       <Provider>
         <ResourceBoundary resetKey={settingsKey(settings)} refetch={refetch}>
           <Suspense fallback={<PanelSkeleton title="Jotai resource is suspending" />}>
-            <JotaiResourcePanel settings={settings} refetch={refetch} />
+            <JotaiResourcePanel settings={settings} />
           </Suspense>
         </ResourceBoundary>
       </Provider>
@@ -476,26 +450,19 @@ function DashboardDataPanel({
   }
 
   if (activeStrategy === "swr") {
-    return <SwrDataPanel settings={settings} refetch={refetch} />;
+    return <SwrDataPanel settings={settings} />;
   }
 
   return <UseEffectDataPanel settings={settings} refetch={refetch} />;
 }
 
-function JotaiResourcePanel({
-  settings,
-  refetch,
-}: {
-  settings: SimulatorSettings;
-  refetch: () => void;
-}) {
+function JotaiResourcePanel({ settings }: { settings: SimulatorSettings }) {
   const dashboardAtom = getJotaiDashboardAtom(settings);
-  const resource = useAtomValue(dashboardAtom);
-  const data = use(resource.promise);
-  return <ResolvedDataPanel data={data} refetch={refetch} />;
+  const data = useAtomValue(dashboardAtom);
+  return <ResolvedDataPanel data={data} />;
 }
 
-function SwrDataPanel({ settings, refetch }: { settings: SimulatorSettings; refetch: () => void }) {
+function SwrDataPanel({ settings }: { settings: SimulatorSettings }) {
   const key = [
     "account-dashboard",
     settings.latency,
@@ -519,10 +486,6 @@ function SwrDataPanel({ settings, refetch }: { settings: SimulatorSettings; refe
   return (
     <ResolvedDataPanel
       data={data ?? makePayload("swr", settings)}
-      refetch={() => {
-        refetch();
-        void mutate();
-      }}
       badge={isValidating ? "Updating cached data" : "Serving cached view"}
     />
   );
@@ -561,7 +524,6 @@ function UseEffectDataPanel({
   return (
     <ResolvedDataPanel
       data={data ?? makePayload("use-effect", settings)}
-      refetch={refetch}
       badge={
         loading ? "Local state fetching again" : error ? "Late error catch" : "No cache policy"
       }
@@ -572,12 +534,10 @@ function UseEffectDataPanel({
 
 function ResolvedDataPanel({
   data,
-  refetch,
   badge,
   warning,
 }: {
   data: DashboardPayload;
-  refetch: () => void;
   badge?: string;
   warning?: string;
 }) {
@@ -672,148 +632,148 @@ function ResolvedDataPanel({
             </tbody>
           </table>
         </div>
-        <button
-          className="m-3 flex w-[calc(100%-1.5rem)] items-center justify-center gap-2 rounded-md border border-[#d8d8d2] py-2 text-[12px] font-medium"
-          type="button"
-          onClick={refetch}
-        >
-          View all accounts
-          <ExternalLink size={13} />
-        </button>
       </div>
     </div>
   );
 }
 
-function SimulatorPanel({
+function FloatingTweaks({
+  refetch,
+  reset,
   settings,
   updateSettings,
-  refetch,
 }: {
+  refetch: () => void;
+  reset: () => void;
   settings: SimulatorSettings;
   updateSettings: (next: Partial<SimulatorSettings>) => void;
-  refetch: () => void;
 }) {
-  const logs = makePayload("client-loader", settings).logs;
-
   return (
-    <div className="min-w-0 border-r border-[#e7e7e2] p-4">
-      <SectionTitle title="API Simulator" />
-      <div className="grid gap-3">
-        <div className="grid gap-3 sm:grid-cols-[1.15fr_0.85fr]">
-          <label className="grid gap-1 text-[12px]">
-            <span className="font-medium">Endpoint</span>
-            <select className="rounded-md border border-[#d8d8d2] bg-white px-3 py-2 text-[12px]">
-              <option>GET /api/accounts/:id</option>
-              <option>GET /api/accounts?window=15m</option>
-            </select>
-          </label>
-          <label className="grid gap-1 text-[12px]">
-            <span className="font-medium">Account ID</span>
-            <input
-              className="rounded-md border border-[#d8d8d2] bg-white px-3 py-2 text-[12px]"
-              readOnly
-              value="acct_7f9a2d1b"
-            />
-          </label>
+    <div className="fixed bottom-4 right-4 z-50">
+      <Popover>
+        <PopoverTrigger
+          aria-label="Open tweaks"
+          className="flex size-8 items-center justify-center rounded-full border border-[#cfcfca] bg-[#1d1d1f] text-white shadow-[0_8px_22px_rgba(0,0,0,0.18)] transition hover:bg-[#2c2c2e] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1d1d1f] focus-visible:ring-offset-2"
+        >
+          <SlidersHorizontal size={14} />
+        </PopoverTrigger>
+
+        <PopoverContent
+          aria-label="Tweaks"
+          className="w-[min(calc(100vw-2rem),360px)] p-3"
+          side="top"
+          align="end"
+          sideOffset={10}
+        >
+          <div className="mb-3 flex items-start justify-between gap-3">
+            <PopoverHeader>
+              <PopoverTitle className="text-[13px] font-semibold">Tweaks</PopoverTitle>
+              <PopoverDescription className="text-[11px] text-[#6e6e73]">
+                API behavior controls
+              </PopoverDescription>
+            </PopoverHeader>
+            <PopoverClose
+              aria-label="Close tweaks"
+              className="flex size-7 items-center justify-center rounded-md border border-[#d8d8d2] text-[#6e6e73] hover:bg-[#f4f4f1] focus:outline-none focus-visible:ring-2 focus-visible:ring-[#1d1d1f]"
+            >
+              <X size={14} />
+            </PopoverClose>
+          </div>
+
+          <TweaksPanel
+            refetch={refetch}
+            reset={reset}
+            settings={settings}
+            updateSettings={updateSettings}
+          />
+        </PopoverContent>
+      </Popover>
+    </div>
+  );
+}
+
+function TweaksPanel({
+  refetch,
+  reset,
+  settings,
+  updateSettings,
+}: {
+  refetch: () => void;
+  reset: () => void;
+  settings: SimulatorSettings;
+  updateSettings: (next: Partial<SimulatorSettings>) => void;
+}) {
+  return (
+    <div className="grid gap-2">
+      <div className="flex items-center justify-between gap-3 rounded-md border border-[#e2e2dc] bg-[#fbfbf9] px-2.5 py-2">
+        <div>
+          <p className="text-[11px] font-medium">Endpoint</p>
+          <p className="mt-0.5 text-[11px] text-[#6e6e73]">GET /api/accounts/:id</p>
         </div>
-        <label className="grid gap-2 text-[12px]">
-          <span className="flex items-center justify-between font-medium">
-            Simulated Latency
-            <span>{settings.latency} ms</span>
-          </span>
-          <input
-            className="accent-[#1d1d1f]"
-            max={1500}
-            min={0}
-            onChange={(event) => updateSettings({ latency: Number(event.target.value) })}
-            step={50}
-            type="range"
-            value={settings.latency}
-          />
-          <span className="flex justify-between text-[11px] text-[#8a8a8e]">
-            <span>0ms</span>
-            <span>500ms</span>
-            <span>1000ms</span>
-            <span>1500ms</span>
-          </span>
-        </label>
-        <div className="grid gap-2">
-          <ToggleTile
-            checked={settings.error}
-            description="Return 500 error"
-            label="Simulate Error"
-            onChange={(error) => updateSettings({ error })}
-          />
-          <ToggleTile
-            checked={settings.race}
-            description="Execute out-of-order responses"
-            label="Race Condition"
-            onChange={(race) => updateSettings({ race })}
-          />
-          <ToggleTile
-            checked={settings.strict}
-            description="Double invoke in dev"
-            label="React Strict Mode"
-            onChange={(strict) => updateSettings({ strict })}
-          />
-        </div>
+        <span className="rounded-md border border-[#d8d8d2] bg-white px-2 py-1 text-[10px] font-medium text-[#6e6e73]">
+          acct_7f9a2d1b
+        </span>
+      </div>
+
+      <label className="grid gap-1.5 text-[11px]">
+        <span className="flex items-center justify-between font-medium">
+          Latency
+          <span>{settings.latency} ms</span>
+        </span>
+        <input
+          className="accent-[#1d1d1f]"
+          max={1500}
+          min={0}
+          onChange={(event) => updateSettings({ latency: Number(event.target.value) })}
+          step={50}
+          type="range"
+          value={settings.latency}
+        />
+        <span className="flex justify-between text-[10px] text-[#8a8a8e]">
+          <span>0</span>
+          <span>500</span>
+          <span>1000</span>
+          <span>1500</span>
+        </span>
+      </label>
+
+      <div className="grid gap-1.5">
+        <ToggleTile
+          checked={settings.error}
+          description="Return 500"
+          label="Simulate Error"
+          onChange={(error) => updateSettings({ error })}
+        />
+        <ToggleTile
+          checked={settings.race}
+          description="Out-of-order responses"
+          label="Race Condition"
+          onChange={(race) => updateSettings({ race })}
+        />
+        <ToggleTile
+          checked={settings.strict}
+          description="Double invoke in dev"
+          label="React Strict Mode"
+          onChange={(strict) => updateSettings({ strict })}
+        />
+      </div>
+
+      <div className="grid gap-1.5 sm:grid-cols-2">
         <button
-          className="flex items-center justify-center gap-2 rounded-md border border-[#1d1d1f] bg-white px-3 py-2 text-[12px] font-semibold text-[#1d1d1f]"
+          className="flex items-center justify-center gap-2 rounded-md border border-[#1d1d1f] bg-white px-2.5 py-1.5 text-[11px] font-semibold text-[#1d1d1f]"
           onClick={refetch}
           type="button"
         >
-          <RefreshCw size={14} />
-          Refetch Now
+          <RefreshCw size={13} />
+          Refetch
         </button>
-      </div>
-
-      <div className="mt-4 rounded-lg border border-[#e2e2dc]">
-        <div className="flex items-center justify-between border-b border-[#eeeeea] px-3 py-2">
-          <h3 className="text-[13px] font-semibold">Request Log (last 15m)</h3>
-          <button
-            className="rounded-md border border-[#d8d8d2] px-2 py-1 text-[11px]"
-            type="button"
-          >
-            Clear
-          </button>
-        </div>
-        <div className="overflow-x-auto">
-          <table className="w-full min-w-[420px] text-left text-[12px]">
-            <thead className="text-[#6e6e73]">
-              <tr className="border-b border-[#eeeeea]">
-                <th className="px-3 py-2 font-medium">Time</th>
-                <th className="px-3 py-2 font-medium">Strategy</th>
-                <th className="px-3 py-2 font-medium">Status</th>
-                <th className="px-3 py-2 font-medium">Latency</th>
-                <th className="px-3 py-2 font-medium">Size</th>
-              </tr>
-            </thead>
-            <tbody>
-              {logs.map((log) => (
-                <tr className="border-t border-[#f1f1ed]" key={log.id}>
-                  <td className="px-3 py-2">{log.time}</td>
-                  <td className="px-3 py-2">{log.strategy}</td>
-                  <td className="px-3 py-2">
-                    <span
-                      className={
-                        log.status === "200 OK"
-                          ? "text-[#177b35]"
-                          : log.status === "aborted"
-                            ? "text-[#8a6f00]"
-                            : "text-[#c53030]"
-                      }
-                    >
-                      {log.status}
-                    </span>
-                  </td>
-                  <td className="px-3 py-2">{log.latency}ms</td>
-                  <td className="px-3 py-2">{log.size}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </div>
+        <button
+          className="rounded-md border border-[#d8d8d2] bg-white px-2.5 py-1.5 text-[11px] font-semibold text-[#1d1d1f]"
+          onClick={reset}
+          type="button"
+        >
+          Reset
+        </button>
       </div>
     </div>
   );
@@ -857,7 +817,7 @@ function ImplementationPanel({
 
       <div className="mt-4 grid gap-3 lg:grid-cols-[1fr_0.9fr]">
         <div className="rounded-lg border border-[#e2e2dc] p-4">
-          <h3 className="mb-3 text-[13px] font-semibold">Why this works well</h3>
+          <h3 className="mb-3 text-[13px] font-semibold">なぜうまく機能するか</h3>
           <ul className="grid gap-2 text-[12px] leading-5 text-[#555]">
             {selected.strengths.map((item) => (
               <li className="flex gap-2" key={item}>
@@ -868,7 +828,7 @@ function ImplementationPanel({
           </ul>
         </div>
         <div className="rounded-lg border border-[#ead8b9] bg-[#fffaf2] p-4">
-          <h3 className="mb-3 text-[13px] font-semibold">Potential limitations</h3>
+          <h3 className="mb-3 text-[13px] font-semibold">注意したい制約</h3>
           <ul className="grid gap-2 text-[12px] leading-5 text-[#6a5735]">
             {selected.limitations.map((item) => (
               <li className="flex gap-2" key={item}>
@@ -971,7 +931,7 @@ function parseSettingsKey(key: string): SimulatorSettings {
 }
 
 const jotaiDashboardAtomFamily = atomFamily((key: string) =>
-  atom({ promise: fetchAccountDashboard("jotai-use", parseSettingsKey(key)) }),
+  atom(async () => fetchAccountDashboard("jotai-use", parseSettingsKey(key))),
 );
 
 function getJotaiDashboardAtom(settings: SimulatorSettings) {
@@ -1015,12 +975,12 @@ function ToggleTile({
   onChange: (checked: boolean) => void;
 }) {
   return (
-    <label className="flex cursor-pointer items-center justify-between gap-3 rounded-md border border-[#e2e2dc] p-3">
+    <label className="flex cursor-pointer items-center justify-between gap-3 rounded-md border border-[#e2e2dc] p-2.5">
       <span>
-        <span className="block text-[12px] font-medium">{label}</span>
-        <span className="mt-1 block text-[11px] leading-4 text-[#6e6e73]">{description}</span>
+        <span className="block text-[11px] font-medium">{label}</span>
+        <span className="mt-0.5 block text-[10px] leading-4 text-[#6e6e73]">{description}</span>
       </span>
-      <span className="relative inline-flex h-6 w-10 items-center">
+      <span className="relative inline-flex h-5 w-9 items-center">
         <input
           checked={checked}
           className="peer sr-only"
@@ -1028,30 +988,9 @@ function ToggleTile({
           type="checkbox"
         />
         <span className="absolute inset-0 rounded-full bg-[#d8d8d2] transition peer-checked:bg-[#1d1d1f]" />
-        <span className="absolute left-0.5 size-5 rounded-full bg-white shadow-sm transition peer-checked:translate-x-4" />
+        <span className="absolute left-0.5 size-4 rounded-full bg-white shadow-sm transition peer-checked:translate-x-4" />
       </span>
     </label>
-  );
-}
-
-function ToolbarButton({
-  icon: Icon,
-  label,
-  suffix,
-}: {
-  icon: typeof Monitor;
-  label: string;
-  suffix?: ReactNode;
-}) {
-  return (
-    <button
-      className="flex items-center gap-2 rounded-md border border-[#d8d8d2] bg-white px-3 py-1.5 text-[12px] font-medium text-[#1d1d1f]"
-      type="button"
-    >
-      <Icon size={14} />
-      {label}
-      {suffix}
-    </button>
   );
 }
 
