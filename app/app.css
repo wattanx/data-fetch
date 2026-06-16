@@ -8,9 +8,38 @@
 
 html,
 body {
-  @apply bg-white dark:bg-gray-950;
+  @apply bg-[#f7f7f5] text-[#1d1d1f];
 
   @media (prefers-color-scheme: dark) {
-    color-scheme: dark;
+    color-scheme: light;
   }
+}
+
+* {
+  box-sizing: border-box;
+}
+
+body {
+  margin: 0;
+  font-feature-settings: "cv02", "cv03", "cv04", "cv11";
+  -webkit-font-smoothing: antialiased;
+  text-rendering: optimizeLegibility;
+}
+
+button,
+input,
+select {
+  font: inherit;
+}
+
+button {
+  cursor: pointer;
+}
+
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+select:focus-visible {
+  outline: 2px solid #1d1d1f;
+  outline-offset: 2px;
 }

@@ -1,13 +1,15 @@
-import type { Route } from "./+types/home";
-import { Welcome } from "../welcome/welcome";
+import { Navigate } from "react-router";
 
-export function meta({}: Route.MetaArgs) {
+export function meta() {
   return [
-    { title: "New React Router App" },
-    { name: "description", content: "Welcome to React Router!" },
+    { title: "Fetch Strategy Studio" },
+    {
+      name: "description",
+      content: "Interactive React data fetching patterns without useEffect-first architecture.",
+    },
   ];
 }
 
 export default function Home() {
-  return <Welcome />;
+  return <Navigate replace to="/client-loader" />;
 }

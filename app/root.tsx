@@ -1,11 +1,4 @@
-import {
-  isRouteErrorResponse,
-  Links,
-  Meta,
-  Outlet,
-  Scripts,
-  ScrollRestoration,
-} from "react-router";
+import { isRouteErrorResponse, Links, Meta, Outlet, Scripts } from "react-router";
 
 import type { Route } from "./+types/root";
 import "./app.css";
@@ -34,7 +27,6 @@ export function Layout({ children }: { children: React.ReactNode }) {
       </head>
       <body>
         {children}
-        <ScrollRestoration />
         <Scripts />
       </body>
     </html>
@@ -43,6 +35,25 @@ export function Layout({ children }: { children: React.ReactNode }) {
 
 export default function App() {
   return <Outlet />;
+}
+
+export function HydrateFallback() {
+  return (
+    <main className="min-h-screen bg-[#f7f7f5] p-6 text-[#1d1d1f]">
+      <div className="mx-auto max-w-[1480px]">
+        <div className="mb-4 h-12 rounded-lg border border-[#dfdfda] bg-white" />
+        <div className="grid gap-3 lg:grid-cols-4">
+          {Array.from({ length: 4 }).map((_, index) => (
+            <div
+              className="h-56 animate-pulse rounded-lg border border-[#dfdfda] bg-white"
+              key={index}
+            />
+          ))}
+        </div>
+        <div className="mt-4 h-[520px] animate-pulse rounded-lg border border-[#dfdfda] bg-white" />
+      </div>
+    </main>
+  );
 }
 
 export function ErrorBoundary({ error }: Route.ErrorBoundaryProps) {
