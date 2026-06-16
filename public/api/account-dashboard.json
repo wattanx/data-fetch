@@ -1,0 +1,66 @@
+{
+  "account": {
+    "id": "acct_7f9a2d1b",
+    "name": "Acme Corp.",
+    "domain": "acme.com",
+    "mrr": 28540,
+    "status": "Active",
+    "requests": 2431,
+    "incidents": 0
+  },
+  "accounts": [
+    {
+      "id": "acct_7f9a2d1b",
+      "name": "Acme Corp.",
+      "domain": "acme.com",
+      "mrr": 28540,
+      "status": "Active",
+      "requests": 2431,
+      "incidents": 0
+    },
+    {
+      "id": "acct_3b2c91aa",
+      "name": "Globex Inc.",
+      "domain": "globex.com",
+      "mrr": 16230,
+      "status": "Active",
+      "requests": 1842,
+      "incidents": 1
+    },
+    {
+      "id": "acct_8120abef",
+      "name": "Initech",
+      "domain": "initech.com",
+      "mrr": 8910,
+      "status": "Active",
+      "requests": 913,
+      "incidents": 0
+    },
+    {
+      "id": "acct_trial_17",
+      "name": "Soylent Corp.",
+      "domain": "soylent.com",
+      "mrr": 4120,
+      "status": "Trial",
+      "requests": 405,
+      "incidents": 0
+    },
+    {
+      "id": "acct_umbrella",
+      "name": "Umbrella Co.",
+      "domain": "umbrella.com",
+      "mrr": 2340,
+      "status": "At risk",
+      "requests": 231,
+      "incidents": 1
+    }
+  ],
+  "logs": [],
+  "generatedAt": "fixture",
+  "summary": {
+    "users": 128,
+    "projects": 24,
+    "requests": 2431,
+    "errorRate": 0.18
+  }
+}

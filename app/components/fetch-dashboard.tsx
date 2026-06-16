@@ -79,7 +79,9 @@ export default function Route() {
     "api.ts": `export async function fetchAccountDashboard(strategy, settings, signal) {
   await wait(settings.latency, signal);
   if (settings.error) throw new Error("500 from /api/accounts/:id");
-  return makePayload(strategy, settings);
+  const response = await fetch("/api/account-dashboard.json", { signal });
+  if (!response.ok) throw new Error("Unexpected API response");
+  return applyScenario(await response.json(), strategy, settings);
 }`,
     "notes.md": `Why this works:
 - the route shell renders before slow data resolves
@@ -646,12 +648,6 @@ function TweaksPanel({
           description="Out-of-order responses"
           label="Race Condition"
           onChange={(race) => updateSettings({ race })}
-        />
-        <ToggleTile
-          checked={settings.strict}
-          description="Double invoke in dev"
-          label="React Strict Mode"
-          onChange={(strict) => updateSettings({ strict })}
         />
       </div>
 

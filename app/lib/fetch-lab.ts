@@ -1,6 +1,6 @@
 export type StrategyId = "client-loader" | "jotai-use" | "swr" | "use-effect";
 
-export type ScenarioMode = "normal" | "slow" | "error" | "race" | "strict";
+export type ScenarioMode = "normal" | "slow" | "error" | "race";
 
 export type SimulatorSettings = {
   latency: number;
@@ -161,9 +161,11 @@ export const defaultSettings: SimulatorSettings = {
   latency: 650,
   error: false,
   race: false,
-  strict: false,
+  strict: true,
   seed: 1,
 };
+
+const dashboardFixtureUrl = "/api/account-dashboard.json";
 
 const baseAccounts: Account[] = [
   {
@@ -225,7 +227,7 @@ export function parseSettings(searchParams: URLSearchParams): SimulatorSettings 
     latency: clamp(Number(searchParams.get("latency") ?? latencyFromMode), 0, 1500),
     error: searchParams.get("error") === "1" || mode === "error",
     race: searchParams.get("race") === "1" || mode === "race",
-    strict: searchParams.get("strict") === "1" || mode === "strict",
+    strict: true,
     seed: Number(searchParams.get("seed") ?? defaultSettings.seed),
   };
 }
@@ -236,7 +238,6 @@ export function settingsToSearch(settings: SimulatorSettings) {
   next.set("seed", String(settings.seed));
   if (settings.error) next.set("error", "1");
   if (settings.race) next.set("race", "1");
-  if (settings.strict) next.set("strict", "1");
   return next;
 }
 
@@ -251,11 +252,41 @@ export async function fetchAccountDashboard(
     throw new Error("Simulated 500 response from /api/accounts/:id");
   }
 
-  return makePayload(strategyId, settings);
+  const response = await fetch(dashboardFixtureUrl, { signal });
+
+  if (!response.ok) {
+    throw new Error(`Unexpected ${response.status} response from ${dashboardFixtureUrl}`);
+  }
+
+  const payload = (await response.json()) as DashboardPayload;
+  return applyScenarioPayload(payload, strategyId, settings);
 }
 
 export function makePayload(strategyId: StrategyId, settings: SimulatorSettings): DashboardPayload {
-  const account = baseAccounts[0];
+  return applyScenarioPayload(
+    {
+      account: baseAccounts[0],
+      accounts: baseAccounts,
+      logs: [],
+      generatedAt: "fixture",
+      summary: {
+        users: 128,
+        projects: 24,
+        requests: 2431,
+        errorRate: 0.18,
+      },
+    },
+    strategyId,
+    settings,
+  );
+}
+
+function applyScenarioPayload(
+  payload: DashboardPayload,
+  strategyId: StrategyId,
+  settings: SimulatorSettings,
+): DashboardPayload {
+  const account = payload.account;
   const requestBump = settings.seed * 7;
   const logs = makeLogs(strategyId, settings);
 
@@ -265,7 +296,7 @@ export function makePayload(strategyId: StrategyId, settings: SimulatorSettings)
       requests: account.requests + requestBump,
       mrr: account.mrr + settings.seed * 120,
     },
-    accounts: baseAccounts.map((item, index) => ({
+    accounts: payload.accounts.map((item, index) => ({
       ...item,
       requests: item.requests + settings.seed * (index + 2),
       mrr: item.mrr + settings.seed * (index + 1) * 40,
@@ -277,10 +308,10 @@ export function makePayload(strategyId: StrategyId, settings: SimulatorSettings)
       second: "2-digit",
     }),
     summary: {
-      users: 128 + settings.seed,
-      projects: 24 + (settings.seed % 4),
-      requests: 2431 + requestBump,
-      errorRate: settings.error ? 3.8 : 0.18 + settings.seed * 0.01,
+      users: payload.summary.users + settings.seed,
+      projects: payload.summary.projects + (settings.seed % 4),
+      requests: payload.summary.requests + requestBump,
+      errorRate: settings.error ? 3.8 : payload.summary.errorRate + settings.seed * 0.01,
     },
   };
 }
