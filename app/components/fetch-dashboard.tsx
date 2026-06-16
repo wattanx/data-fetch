@@ -12,15 +12,10 @@ import {
   X,
   Zap,
 } from "lucide-react";
-import { Component, Suspense, useEffect, useState, type ReactNode } from "react";
-import { atom, Provider, useAtomValue } from "jotai";
-import { atomFamily } from "jotai/utils";
-import useSWR from "swr";
+import { useEffect, useState, type ReactNode } from "react";
 import {
   defaultSettings,
-  fetchAccountDashboard,
   getStrategy,
-  makePayload,
   parseSettings,
   settingsToSearch,
   strategies,
@@ -40,10 +35,18 @@ import {
   PopoverTrigger,
 } from "./ui/popover";
 
-type FetchDashboardProps = {
+export type DashboardControls = {
+  refetch: () => void;
+  reset: () => void;
+  settings: SimulatorSettings;
+  updateSettings: (next: Partial<SimulatorSettings>) => void;
+};
+
+type DashboardPageProps = {
   activeStrategy: StrategyId;
-  loaderData?: DashboardPayload;
-  loaderError?: string;
+  children: ReactNode;
+  controls: DashboardControls;
+  generatedAt?: string;
 };
 
 const routeTabs = [
@@ -139,16 +142,9 @@ The caveat is ownership: route loaders and SWR can both think they own freshness
   },
 };
 
-export function FetchDashboard({ activeStrategy, loaderData, loaderError }: FetchDashboardProps) {
+export function useDashboardControls(): DashboardControls {
   const [searchParams, setSearchParams] = useSearchParams();
-  const navigate = useNavigate();
   const settings = parseSettings(searchParams);
-  const selected = getStrategy(activeStrategy);
-  const [activeCodeTab, setActiveCodeTab] = useState(Object.keys(codeSamples[activeStrategy])[0]);
-
-  useEffect(() => {
-    setActiveCodeTab(Object.keys(codeSamples[activeStrategy])[0]);
-  }, [activeStrategy]);
 
   function updateSettings(next: Partial<SimulatorSettings>) {
     const merged = { ...settings, ...next };
@@ -165,6 +161,24 @@ export function FetchDashboard({ activeStrategy, loaderData, loaderError }: Fetc
       replace: false,
     });
   }
+
+  return { refetch, reset, settings, updateSettings };
+}
+
+export function DashboardPage({
+  activeStrategy,
+  children,
+  controls,
+  generatedAt,
+}: DashboardPageProps) {
+  const navigate = useNavigate();
+  const selected = getStrategy(activeStrategy);
+  const [activeCodeTab, setActiveCodeTab] = useState(Object.keys(codeSamples[activeStrategy])[0]);
+  const { refetch, reset, settings, updateSettings } = controls;
+
+  useEffect(() => {
+    setActiveCodeTab(Object.keys(codeSamples[activeStrategy])[0]);
+  }, [activeStrategy]);
 
   return (
     <main className="min-h-screen bg-[#f7f7f5] text-[#1d1d1f]">
@@ -190,18 +204,12 @@ export function FetchDashboard({ activeStrategy, loaderData, loaderError }: Fetc
               </span>
             </div>
             <div className="text-[12px] text-[#6e6e73]">
-              <span>Generated {loaderData?.generatedAt ?? "live"}</span>
+              <span>Generated {generatedAt ?? "live"}</span>
             </div>
           </div>
 
           <div className="grid gap-0 xl:grid-cols-[0.92fr_1.08fr]">
-            <DashboardDataPanel
-              activeStrategy={activeStrategy}
-              loaderData={loaderData}
-              loaderError={loaderError}
-              settings={settings}
-              refetch={refetch}
-            />
+            {children}
             <ImplementationPanel
               activeStrategy={activeStrategy}
               activeCodeTab={activeCodeTab}
@@ -412,127 +420,7 @@ function MetricRows({
   );
 }
 
-function DashboardDataPanel({
-  activeStrategy,
-  loaderData,
-  loaderError,
-  settings,
-  refetch,
-}: {
-  activeStrategy: StrategyId;
-  loaderData?: DashboardPayload;
-  loaderError?: string;
-  settings: SimulatorSettings;
-  refetch: () => void;
-}) {
-  if (activeStrategy === "client-loader" && loaderError) {
-    return <ErrorPanel message={loaderError} refetch={refetch} title="Route Error Boundary" />;
-  }
-
-  if (activeStrategy === "client-loader" && loaderData) {
-    return <ResolvedDataPanel data={loaderData} />;
-  }
-
-  if (activeStrategy === "client-loader") {
-    return <PanelSkeleton title="clientLoader is resolving before render" />;
-  }
-
-  if (activeStrategy === "jotai-use") {
-    return (
-      <Provider>
-        <ResourceBoundary resetKey={settingsKey(settings)} refetch={refetch}>
-          <Suspense fallback={<PanelSkeleton title="Jotai resource is suspending" />}>
-            <JotaiResourcePanel settings={settings} />
-          </Suspense>
-        </ResourceBoundary>
-      </Provider>
-    );
-  }
-
-  if (activeStrategy === "swr") {
-    return <SwrDataPanel settings={settings} />;
-  }
-
-  return <UseEffectDataPanel settings={settings} refetch={refetch} />;
-}
-
-function JotaiResourcePanel({ settings }: { settings: SimulatorSettings }) {
-  const dashboardAtom = getJotaiDashboardAtom(settings);
-  const data = useAtomValue(dashboardAtom);
-  return <ResolvedDataPanel data={data} />;
-}
-
-function SwrDataPanel({ settings }: { settings: SimulatorSettings }) {
-  const key = [
-    "account-dashboard",
-    settings.latency,
-    settings.error,
-    settings.race,
-    settings.strict,
-    settings.seed,
-  ] as const;
-  const { data, error, isLoading, isValidating, mutate } = useSWR(
-    key,
-    () => fetchAccountDashboard("swr", settings),
-    {
-      keepPreviousData: true,
-      revalidateOnFocus: true,
-      shouldRetryOnError: false,
-    },
-  );
-
-  if (isLoading && !data) return <PanelSkeleton title="SWR is loading the first response" />;
-  if (error && !data) return <ErrorPanel message={error.message} refetch={() => void mutate()} />;
-  return (
-    <ResolvedDataPanel
-      data={data ?? makePayload("swr", settings)}
-      badge={isValidating ? "Updating cached data" : "Serving cached view"}
-    />
-  );
-}
-
-function UseEffectDataPanel({
-  settings,
-  refetch,
-}: {
-  settings: SimulatorSettings;
-  refetch: () => void;
-}) {
-  const [data, setData] = useState<DashboardPayload | null>(() =>
-    makePayload("use-effect", settings),
-  );
-  const [loading, setLoading] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    setLoading(true);
-    setError(null);
-    fetchAccountDashboard("use-effect", settings)
-      .then((payload) => {
-        setData(payload);
-      })
-      .catch((reason: unknown) => {
-        setError(reason instanceof Error ? reason.message : "Unknown error");
-      })
-      .finally(() => {
-        setLoading(false);
-      });
-  }, [settings.latency, settings.error, settings.race, settings.seed, settings.strict]);
-
-  if (loading && !data) return <PanelSkeleton title="Component-local loading state" />;
-  if (error && !data) return <ErrorPanel message={error} refetch={refetch} />;
-  return (
-    <ResolvedDataPanel
-      data={data ?? makePayload("use-effect", settings)}
-      badge={
-        loading ? "Local state fetching again" : error ? "Late error catch" : "No cache policy"
-      }
-      warning={error ?? undefined}
-    />
-  );
-}
-
-function ResolvedDataPanel({
+export function ResolvedDataPanel({
   data,
   badge,
   warning,
@@ -843,7 +731,7 @@ function ImplementationPanel({
   );
 }
 
-function PanelSkeleton({ title }: { title: string }) {
+export function PanelSkeleton({ title }: { title: string }) {
   return (
     <div className="min-w-0 border-r border-[#e7e7e2] p-4">
       <SectionTitle title={title} badge="Loading" />
@@ -856,7 +744,7 @@ function PanelSkeleton({ title }: { title: string }) {
   );
 }
 
-function ErrorPanel({
+export function ErrorPanel({
   message,
   refetch,
   title = "Error Boundary Preview",
@@ -882,60 +770,6 @@ function ErrorPanel({
       </div>
     </div>
   );
-}
-
-class ResourceBoundary extends Component<
-  { children: ReactNode; refetch: () => void; resetKey: string },
-  { error: Error | null; resetKey: string }
-> {
-  state: { error: Error | null; resetKey: string } = {
-    error: null,
-    resetKey: this.props.resetKey,
-  };
-
-  static getDerivedStateFromError(error: Error) {
-    return { error };
-  }
-
-  static getDerivedStateFromProps(
-    props: { resetKey: string },
-    state: { error: Error | null; resetKey: string },
-  ) {
-    if (props.resetKey !== state.resetKey) {
-      return { error: null, resetKey: props.resetKey };
-    }
-    return null;
-  }
-
-  render() {
-    if (this.state.error) {
-      return <ErrorPanel message={this.state.error.message} refetch={this.props.refetch} />;
-    }
-    return this.props.children;
-  }
-}
-
-function settingsKey(settings: SimulatorSettings) {
-  return `${settings.latency}:${settings.error}:${settings.race}:${settings.strict}:${settings.seed}`;
-}
-
-function parseSettingsKey(key: string): SimulatorSettings {
-  const [latency, error, race, strict, seed] = key.split(":");
-  return {
-    latency: Number(latency),
-    error: error === "true",
-    race: race === "true",
-    strict: strict === "true",
-    seed: Number(seed),
-  };
-}
-
-const jotaiDashboardAtomFamily = atomFamily((key: string) =>
-  atom(async () => fetchAccountDashboard("jotai-use", parseSettingsKey(key))),
-);
-
-function getJotaiDashboardAtom(settings: SimulatorSettings) {
-  return jotaiDashboardAtomFamily(settingsKey(settings));
 }
 
 function SectionTitle({ title, badge }: { title: string; badge?: string }) {

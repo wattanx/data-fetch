@@ -1,5 +1,10 @@
 import { useLoaderData, useRouteError } from "react-router";
-import { FetchDashboard } from "../components/fetch-dashboard";
+import {
+  DashboardPage,
+  ErrorPanel,
+  ResolvedDataPanel,
+  useDashboardControls,
+} from "../components/fetch-dashboard";
 import { fetchAccountDashboard, parseSettings } from "../lib/fetch-lab";
 import type { Route } from "./+types/client-loader";
 
@@ -14,12 +19,27 @@ export async function clientLoader({ request }: Route.ClientLoaderArgs) {
 
 export function ErrorBoundary() {
   const error = useRouteError();
+  const controls = useDashboardControls();
   const message = error instanceof Error ? error.message : "The route loader failed.";
 
-  return <FetchDashboard activeStrategy="client-loader" loaderError={message} />;
+  return (
+    <DashboardPage activeStrategy="client-loader" controls={controls}>
+      <ErrorPanel message={message} refetch={controls.refetch} title="Route Error Boundary" />
+    </DashboardPage>
+  );
 }
 
 export default function ClientLoaderRoute() {
+  const controls = useDashboardControls();
   const data = useLoaderData<typeof clientLoader>();
-  return <FetchDashboard activeStrategy="client-loader" loaderData={data} />;
+
+  return (
+    <DashboardPage
+      activeStrategy="client-loader"
+      controls={controls}
+      generatedAt={data.generatedAt}
+    >
+      <ResolvedDataPanel data={data} />
+    </DashboardPage>
+  );
 }
